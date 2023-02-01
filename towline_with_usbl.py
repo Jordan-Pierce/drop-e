@@ -16,15 +16,35 @@ if __name__ == "__main__":
         help="Path to a GIS file containing USBL GPS points.")
     parser.add_argument("--datetime_field", "-d",
         type=str,
-        help="Name of the field in the USBL attribute table that contains temporal information.")
+        default="DateTime",
+        help="Name of the field in the USBL attribute table that contains temporal \
+                information. Default value is 'DateTime'.")
+    parser.add_argument("--process_noise_std", "-p",
+        type=float,
+        default=1.0,
+        help="One of two parameters that controls the smoothing of tracklines. If set \
+                to 0.0, no smoothing will be applied. Default value is 1.0.")
+    parser.add_argument("--measurement_noise_std", "-m",
+        type=float,
+        default=0.25,
+        help="One of two parameters that controls the smoothing of tracklines. If set \
+                to 0.0, no smoothing will be applied. Default value is 0.25.")
 
     args = parser.parse_args()
 
-    # Create a towline object
-    towline = TowLine(args.image_dir, args.out_dir, args.usbl_path)
+    # Create a TowLine object, which kicks off a processing chain...
 
-    # Calculate the trajectory
-    towline.calc_usbl_traj(datetime_field=args.datetime_field)
+    towline = TowLine(args.image_dir, args.out_dir, args.usbl_path,
+                    args.datetime_field,
+                    args.process_noise_std, args.measurement_noise_std)
 
-    # Plot the trajectory
-    towline.plot_traj()
+
+    # Plot the smoothing operation...
+    # TODO: make this optional... (verbose?)
+    towline.plot_smoothing_operation(save_fig=True)
+
+    # Plot the EXIF-USBL fit...
+    towline.plot_usbl_fit(save_fig=True)
+
+    # Dump the GDFs...
+    towline.dump_gdfs()
