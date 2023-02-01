@@ -38,6 +38,8 @@ if __name__ == "__main__":
                     args.datetime_field,
                     args.process_noise_std, args.measurement_noise_std)
 
+    # Dump the GDFs...
+    towline.dump_gdfs()
 
     # Plot the smoothing operation...
     # TODO: make this optional... (verbose?)
@@ -45,6 +47,3 @@ if __name__ == "__main__":
 
     # Plot the EXIF-USBL fit...
     towline.plot_usbl_fit(save_fig=True)
-
-    # Dump the GDFs...
-    towline.dump_gdfs()

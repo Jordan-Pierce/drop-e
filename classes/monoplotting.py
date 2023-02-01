@@ -97,7 +97,10 @@ class TowLine:
         self.img_dir = img_dir
         self.out_dir = out_dir
         self.usbl_path = usbl_path
+
         self.datetime_field = datetime_field
+        self.process_noise_std = process_noise_std
+        self.measurement_noise_std = measurement_noise_std
 
         self.img_gdf = None  # the default primary gdf for imagery
         self.fit_img_gdf = None  # if USBL is available, the primary gdf for imagery
@@ -182,6 +185,10 @@ class TowLine:
         # in the sequence, which is a safe assumption for now, but maybe add reverse too?
 
         self.img_gdf = img_gdf
+
+        #print(self.img_gdf.dtypes)
+        #print(self.img_gdf.head(5))
+        self._write_gdf(self.img_gdf, "img_gdf")
 
     def _extract_img_exif(self, img):
         print(f"Reading GeoExif for {img}")
@@ -289,103 +296,114 @@ class TowLine:
         # calculate trajectory information with MovingPandas
         traj = mpd.Trajectory(pt_gdf, 1, t="datetime_field", crs=pt_gdf.crs)
 
+        traj.add_direction()
+        traj.add_speed()
+        traj.add_distance(name="mpd_distance")
+        # traj.add_timedelta()
+
+        self.raw_usbl_traj = traj
+        self.raw_usbl_df = traj.to_point_gdf()
+
         # Smooth trajectories...
         # TODO: experiment with best methods, make smoothing optional.
         # if process_noise_std is not equal to 0.0, smoothing is applied
-        if process_noise_std == 0.0 or measurement_noise_std == 0.0:
-            print(f"Either process_noise_std or measurement_noise_std is set to 0.0, \
-                therefore no smoothing will be applied to trackline.")
+        if process_noise_std != 0.0 or measurement_noise_std != 0.0:
+            s_traj = KalmanSmootherCV(traj).smooth(
+                process_noise_std=process_noise_std,
+                measurement_noise_std=measurement_noise_std)
 
-            smoothed_traj.add_direction()
-            smoothed_traj.add_speed()
-            smoothed_traj.add_distance()
-            smoothed_traj.add_timedelta()
+            s_traj.add_direction(overwrite=True)
+            s_traj.add_direction(overwrite=True)
+            s_traj.add_speed(overwrite=True)
+            s_traj.add_distance(overwrite=True, name="mpd_distance")
+            # traj.add_timedelta(overwrite=True, name="mpd_timedelta")
 
-            self.raw_usbl_traj = traj
-            self.raw_usbl_df = traj.df
+            self.smooth_usbl_traj = s_traj
+            self.smooth_usbl_df = s_traj.to_point_gdf()
 
         else:
-            smoothed_traj = KalmanSmootherCV(traj).smooth(
-                process_noise_std=process_noise_std, measurement_noise_std=measurement_noise_std
-            )
-
-            smoothed_traj.add_direction()
-            smoothed_traj.add_speed()
-            smoothed_traj.add_distance()
-            smoothed_traj.add_timedelta()
-
-            self.smooth_usbl_traj = smoothed_traj
-            self.smooth_usbl_df = smoothed_traj.df
+            print(f"Either process_noise_std or measurement_noise_std is set to 0.0, \
+                therefore no smoothing will be applied to trackline.")
 
     def fit_to_usbl(self):
         # create a copy of the original gdf to work with...
         new_gdf = self.img_gdf.copy()
+        print(new_gdf.head())
         # TODO: Smooth or raw?
         # TODO: filter Time outside of USBL range...
 
+        # TODO: Fit Images to USBL using DateTime
+        new_gdf['Improved_Position'] = new_gdf.apply(
+            lambda row: self.smooth_usbl_traj.get_position_at(
+                row.DateTime, method='interpolated'), axis=1)
+
         # store the vector lines represenintg the  "delta" between each EXIF point and
         # the USBL location at that datetime. These are strictly used for plotting.
-        deltas = []
-        for idx, row in new_gdf.iterrows():
-            # compute delta
-            og_loc = self.img_gdf.loc[idx, 'geometry']
-            new_loc = self.smooth_usbl_traj.get_position_at(row.DateTime, method='interpolated')
-            print(f"{row.img_name} at {og_loc} shifted to {new_loc}.")
-            line = LineString([og_loc, new_loc])
+        delta_gdf = new_gdf[new_gdf.geometry.is_empty == False].copy()
 
-            deltas.append(line)
-            print(f"{row.img_name} at idx {idx} shifted {og_loc.distance(new_loc)} meters.")
+        delta_gdf["Delta_LineString"] = delta_gdf.apply(
+            lambda row: LineString([row.geometry, row.Improved_Position]), axis=1)
 
+        delta_gdf["Delta_LineLength"] = delta_gdf.apply(
+            lambda row: row.Delta_LineString.length, axis=1)
 
-            # TODO: log metadata about shift distance, etc. to flag potential issues.
+        print(f"Len filt / new: {len(delta_gdf)}, {len(new_gdf)}")
+        print(delta_gdf['Delta_LineLength'].describe())
 
-            # TODO: Could this be confusing since we just update projected coords? Either
-            # drop the original coords or update them too?
+        new_gdf.geometry = new_gdf.Improved_Position
+        new_gdf.drop(columns=['Improved_Position'], inplace=True)
 
-            # update locations to USBL
-            new_gdf.loc[idx, 'UTM_Easting'] = new_loc.x
-            new_gdf.loc[idx, 'UTM_Northing'] = new_loc.y
-            new_gdf.loc[idx, "UTM_USBL_Shift"] = og_loc.distance(new_loc)
-            new_gdf.loc[idx, 'geometry'] = Point(new_gdf.loc[idx, 'UTM_Easting'], new_gdf.loc[idx, 'UTM_Northing'])
+        # Set the delta_gdf geometry to linestring
+        delta_gdf.geometry = delta_gdf.Delta_LineString  # TODO: clean this gdf up?
+        delta_gdf.drop(columns=['Delta_LineString', 'Improved_Position'], inplace=True)
 
-            # TODO: fit Z info too
-            #self.img_gdf.loc[idx, 'UTM_Easting_USBL'] = self.smooth_usbl_traj.get_position_at(row.DateTime).x
-            #self.img_gdf.loc[idx, 'UTM_Northing_USBL'] = self.smooth_usbl_traj.get_position_at(row.DateTime).y
-            #self.img_gdf.loc[idx, "UTM_USBL_Shift"] = og_loc.distance(new_loc)
-            #self.img_gdf.loc[idx, 'geometry'] = Point(self.img_gdf.loc[idx, 'UTM_Easting_USBL'], self.img_gdf.loc[idx, 'UTM_Northing_USBL'])
+        # TODO: log metadata about shift distance, etc. to flag potential issues.
 
-        # Drop the deltas to a GeoDataFrame for easy plotting
-        delta_gdf = gpd.GeoDataFrame(
-            geometry=deltas,
-            crs=self.img_gdf.crs
-        )
+        # TODO: fit Z info too
 
         self.delta_gdf = delta_gdf
         self.fit_gdf = new_gdf
 
     """PLOTTING + WRITING FCNS"""
+    def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
+        # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
+        target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref'], axis=1, inplace=True, errors='ignore')
+
+        if format == "GPKG":
+            out_path = os.path.join(self.out_dir, f"{basename}.gpkg")
+        elif format == "ESRI Shapefile":
+            out_path = os.path.join(self.out_dir, f"{basename}.shp")
+        else:
+            raise ValueError(f"Invalid geospatial format: {format}. Must be GPKG or ESRI Shapefile.")
+
+        target_gdf.to_file(
+            out_path, driver=format, index=index
+        )
+
     def dump_gdfs(self):
         if self.fit_gdf is not None:
-            self.fit_gdf.to_file(os.path.join(self.out_dir, "fit_gdf.geojson"), driver="GeoJSON")
+            self._write_gdf(self.fit_gdf, "fit_gdf", format="GPKG", index=False)
 
         if self.img_gdf is not None:
-            self.img_gdf.to_file(os.path.join(self.out_dir, "img_gdf.geojson"), driver="GeoJSON")
+            self._write_gdf(self.img_gdf, "img_gdf", format="GPKG", index=False)
 
         if self.delta_gdf is not None:
-            self.delta_gdf.to_file(os.path.join(self.out_dir, "delta_gdf.geojson"), driver="GeoJSON")
+            self._write_gdf(self.delta_gdf, "delta_gdf", format="GPKG", index=False)
 
         if self.raw_usbl_df is not None:
-            self.raw_usbl_df.to_file(os.path.join(self.out_dir, "raw_usbl_df.geojson"), driver="GeoJSON")
+            self._write_gdf(self.raw_usbl_df, "raw_usbl_df", format="GPKG", index=False)
 
         if self.smooth_usbl_df is not None:
-            self.smooth_usbl_df.to_file(os.path.join(self.out_dir, "smooth_usbl_df.geojson"), driver="GeoJSON")
+            self._write_gdf(self.smooth_usbl_df, "smooth_usbl_df", format="GPKG", index=False)
 
     def plot_smoothing_operation(self, save_fig=False):
         f, ax = plt.subplots()
         if self.raw_usbl_traj is not None:
-            self.raw_usbl_traj.plot(ax=ax, color='red', legend=True)
+            self.raw_usbl_traj.plot(ax=ax, color='red', label="Raw Trajectory", legend=True)
+        else:
+            print("No raw USBL trajectory to plot. Skipping...")
         if self.smooth_usbl_traj is not None:
-            self.smooth_usbl_traj.plot(ax=ax, column="speed", cmap="viridis", legend=True)
+            self.smooth_usbl_traj.plot(ax=ax, column="speed", cmap="viridis", label="Smoothed Trajectory", legend=True)
 
         plt.title("Smoothed USBL Trajectory")
 
@@ -393,10 +411,9 @@ class TowLine:
         plt.ylabel("UTM Northing (m)")
 
         plt.legend()
-        plt.text(f"Process Noise: {self.process_noise_std}")
-        plt.text(f"Measurement Noise: {self.measurement_noise_std}")
+        plt.text(1.0, 1.0, f"Process Noise: {self.process_noise_std} \n Measurement Noise: {self.measurement_noise_std}")
 
-        plt.show()
+        # plt.show()
 
         if save_fig is True:
             plt.savefig(os.path.join(self.out_dir, "smooth_op_plot.png"))
@@ -410,20 +427,21 @@ class TowLine:
 
         else:
             # plot the fit points...
-            self.fit_gdf.plot(ax=ax, color='green', legend=True)
+            self.fit_gdf.plot(ax=ax, color='green', label="Img. USBL Locations", legend=True)
 
             # plot the original points...
-            self.img_gdf.plot(ax=ax, color='red', legend=True)
+            self.img_gdf.plot(ax=ax, color='red', label="Img. Exif Locations", legend=True)
 
             # plot the deltas...
-            self.delta_gdf.plot(ax=ax, color='blue', legend=True)
+            self.delta_gdf.plot(ax=ax, color='blue', label="Shifts", legend=True)
 
             # only plot the best usbl trackline...
             if self.smooth_usbl_traj is not None:
-                self.smooth_usbl_traj.plot(ax=ax, column="speed", cmap="viridis", legend=True)
+                self.smooth_usbl_traj.plot(ax=ax, column="speed", cmap="viridis", label='Smoothed Trackline', legend=True)
             else:
-                self.raw_usbl_traj.plot(ax=ax, color='red', legend=True)
+                self.raw_usbl_traj.plot(ax=ax, color='red', label="Raw Trackline", legend=True)
 
+        plt.text(0, 0, f"Average shift: {self.delta_gdf['Delta_LineLength'].mean()} meters")
         plt.title("EXIF Points to USBL Trajectory Fit")
 
         plt.xlabel("UTM Easting (m)")
@@ -433,6 +451,6 @@ class TowLine:
 
         # TODO: label deltas, print delta metrics.
 
-        plt.show()
+        # plt.show()
         if save_fig is True:
             plt.savefig(os.path.join(self.out_dir, "plot_usbl_fit.png"))
