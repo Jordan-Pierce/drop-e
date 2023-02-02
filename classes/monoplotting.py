@@ -136,8 +136,11 @@ class TowLine:
         # Step 3: Round out the internal / external orientation parameters needed for
         # georeferencing OR orthorectification, and perform the operation.
 
-        # self.calc_gsd()
+        self.apply_gsd(self.fit_gdf)
 
+        self.max_gsd = self.fit_gdf.GSD.max()
+        print(f"Average GSD: {self.fit_gdf.GSD.mean()}")
+        print(f"Max GSD: {self.max_gsd}")
         # self.calc_affine()
 
         # self.georeference()
@@ -214,15 +217,15 @@ class TowLine:
 
             exif_dict['Focal_Plane_X_Resolution'] = img_exif.get('focal_plane_x_resolution')
             exif_dict['Focal_Plane_Y_Resolution'] = img_exif.get('focal_plane_y_resolution')
-            exif_dict['Focal_Plane_Resolution_Unit'] = res_unit_lookup[
-                img_exif.get('focal_plane_resolution_unit')
-            ]
+            exif_dict['Focal_Plane_Resolution_Unit'] = str.lower(
+                res_unit_lookup[img_exif.get('focal_plane_resolution_unit')]
+            )
 
             # Estimate the Sensor Width, Height, and Pixel Pitch
             if exif_dict['Focal_Plane_X_Resolution'] is not None and exif_dict['Focal_Plane_Y_Resolution'] is not None:
                 exif_dict['Est_Sensor_Width'] = exif_dict['Pixel_X_Dimension'] / exif_dict['Focal_Plane_X_Resolution']
                 exif_dict['Est_Sensor_Height'] = exif_dict['Pixel_Y_Dimension'] / exif_dict['Focal_Plane_Y_Resolution']
-                exif_dict['Est_Sensor_Width_Unit'] = exif_dict['Focal_Plane_Resolution_Unit']
+                exif_dict['Est_Sensor_HW_Unit'] = str.lower(exif_dict['Focal_Plane_Resolution_Unit'])
 
                 exif_dict['Pixel_X_Pitch'] = 1 / exif_dict['Focal_Plane_X_Resolution']
                 exif_dict['Pixel_Y_Pitch'] = 1 / exif_dict['Focal_Plane_Y_Resolution']
@@ -243,7 +246,7 @@ class TowLine:
             # Convert Lat/Long to Decimal Degrees, infer UTM Coordinates and Zone
             if exif_dict['GPS_Latitude_DMS'] is not None and exif_dict['GPS_Longitude_DMS'] is not None:
                 exif_dict['GPS_Latitude_DD'] = dms_to_dd(
-                exif_dict['GPS_Latitude_DMS'], exif_dict['GPS_Latitude_Ref']
+                    exif_dict['GPS_Latitude_DMS'], exif_dict['GPS_Latitude_Ref']
                 )
 
                 exif_dict['GPS_Longitude_DD'] = dms_to_dd(
@@ -325,6 +328,24 @@ class TowLine:
             print(f"Either process_noise_std or measurement_noise_std is set to 0.0, \
                 therefore no smoothing will be applied to trackline.")
 
+    def _zLookup(self, img_gdf, usbl_gdf, datetime_field='DateTime', z_field='CameraZ'):
+        # get a list of datetimes every second between start and end:
+        start = usbl_gdf[datetime_field].min()
+        stop = usbl_gdf[datetime_field].max()
+        dt_list = pd.date_range(start, stop, freq='S')
+
+        # merge dt_list with usbl_gdf, fill in missing values with NaN, keep only CaAltCor_m field
+        usbl_dt_gdf = pd.merge(dt_list.to_series(name='time_range'), usbl_gdf, how='left', left_index=True, right_index=True)
+        usbl_dt_gdf = usbl_dt_gdf[['time_range', z_field, datetime_field]]
+
+        # perform linear interpolation to fill in missing Z values
+        usbl_dt_gdf[z_field].interpolate(method='linear', inplace=True)
+
+        # use usbl_dt_gdf as a lookup table to add CaAltCor_m to img_gdf
+        img_gdf[z_field] = img_gdf['DateTime'].map(usbl_dt_gdf.set_index('time_range')[z_field])
+
+        return img_gdf
+
     def fit_to_usbl(self):
         # create a copy of the original gdf to work with...
         new_gdf = self.img_gdf.copy()
@@ -360,9 +381,42 @@ class TowLine:
         # TODO: log metadata about shift distance, etc. to flag potential issues.
 
         # TODO: fit Z info too
+        if self.smooth_usbl_df is not None:
+            z_gdf = self._zLookup(new_gdf, self.smooth_usbl_df, z_field='CamAlt', datetime_field='TimeCor') # TODO: fix hardcodes
+        else:
+            z_gdf = self._zLookup(new_gdf, self.raw_usbl_df, z_field='CamAlt', datetime_field='TimeCor')
 
         self.delta_gdf = delta_gdf
-        self.fit_gdf = new_gdf
+        self.fit_gdf = z_gdf
+
+    """GEOREF FCNS"""
+    def apply_gsd(self, in_gdf):
+        # Extract the ground spacing distance from each row of the fit_gdf
+        in_gdf["GSD"] = in_gdf.apply(
+            lambda row: self._calc_gsd(row), axis=1)
+
+
+    def _calc_gsd(self, row, z_field='CamAlt'):  #TODO: hardcode CamAlt
+        # calculate the ground spacing distance (GSD) for each image
+        H = row[z_field]
+        F = row.Focal_Length_mm
+        img_w = row.Pixel_X_Dimension
+        img_h = row.Pixel_Y_Dimension
+        sensor_w = ureg.convert(row.Est_Sensor_Width, row.Est_Sensor_HW_Unit, "mm")
+        sensor_h = ureg.convert(row.Est_Sensor_Height, row.Est_Sensor_HW_Unit, "mm")
+
+        gsd_w = (H * sensor_w) / (F * img_w)
+        gsd_h = (H * sensor_h) / (F * img_h)
+
+        print(f"gsd_w: {gsd_w}, gsd_h: {gsd_h}, returning: {max(gsd_w, gsd_h)}")
+
+        img_width = (H * sensor_w) / F
+        img_height = (H * sensor_h) / F
+        print(f"img_w/h: {img_width} / {img_height} meters")
+
+        # return the greater (coarser) value of gsd_w and gsd_h as float
+        return max(gsd_w, gsd_h)
+
 
     """PLOTTING + WRITING FCNS"""
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
