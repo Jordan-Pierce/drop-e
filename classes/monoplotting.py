@@ -136,11 +136,15 @@ class TowLine:
         # Step 3: Round out the internal / external orientation parameters needed for
         # georeferencing OR orthorectification, and perform the operation.
 
-        self.apply_gsd(self.fit_gdf)
+        if self.fit_gdf is not None:
+            self.apply_gsd(self.fit_gdf)
 
-        self.max_gsd = self.fit_gdf.GSD.max()
-        print(f"Average GSD: {self.fit_gdf.GSD.mean()}")
-        print(f"Max GSD: {self.max_gsd}")
+            self.max_gsd = self.fit_gdf.GSD_MAX.max()
+            print(f"Average GSD: {self.fit_gdf.GSD_MAX.mean()}")
+            print(f"Max GSD: {self.max_gsd}")
+
+            self.apply_corner_gcps(self.fit_gdf)
+
         # self.calc_affine()
 
         # self.georeference()
@@ -374,17 +378,24 @@ class TowLine:
         new_gdf.geometry = new_gdf.Improved_Position
         new_gdf.drop(columns=['Improved_Position'], inplace=True)
 
+        new_gdf.sort_index(inplace=True)
         # Set the delta_gdf geometry to linestring
         delta_gdf.geometry = delta_gdf.Delta_LineString  # TODO: clean this gdf up?
         delta_gdf.drop(columns=['Delta_LineString', 'Improved_Position'], inplace=True)
 
         # TODO: log metadata about shift distance, etc. to flag potential issues.
 
-        # TODO: fit Z info too
+        # merge the direction values from the usbl_gdf into the new_gdf
+        print (self.smooth_usbl_df['direction'].head())
+
+
+        # fit Z info too
         if self.smooth_usbl_df is not None:
-            z_gdf = self._zLookup(new_gdf, self.smooth_usbl_df, z_field='CamAlt', datetime_field='TimeCor') # TODO: fix hardcodes
+            new_gdf2 = pd.merge_asof(new_gdf, self.smooth_usbl_df[['direction']], left_index=True, right_index=True)
+            z_gdf = self._zLookup(new_gdf2, self.smooth_usbl_df, z_field='CamAlt', datetime_field='TimeCor') # TODO: fix hardcodes
         else:
-            z_gdf = self._zLookup(new_gdf, self.raw_usbl_df, z_field='CamAlt', datetime_field='TimeCor')
+            new_gdf2 = pd.merge_asof(new_gdf, self.raw_usbl_df[['direction']], left_index=True, right_index=True)
+            z_gdf = self._zLookup(new_gdf2, self.raw_usbl_df, z_field='CamAlt', datetime_field='TimeCor')
 
         self.delta_gdf = delta_gdf
         self.fit_gdf = z_gdf
@@ -392,31 +403,69 @@ class TowLine:
     """GEOREF FCNS"""
     def apply_gsd(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
-        in_gdf["GSD"] = in_gdf.apply(
+        in_gdf["GSD_W"] = in_gdf.apply(
             lambda row: self._calc_gsd(row), axis=1)
 
+        in_gdf["GSD_H"] = in_gdf.apply(
+            lambda row: self._calc_gsd(row, height=True), axis=1)
 
-    def _calc_gsd(self, row, z_field='CamAlt'):  #TODO: hardcode CamAlt
-        # calculate the ground spacing distance (GSD) for each image
+        in_gdf['GSD_MAX'] = in_gdf[['GSD_W', 'GSD_H']].max(axis=1)
+
+    def _calc_gsd(self, row, height=False, z_field='CamAlt'):  #TODO: hardcode CamAlt
+        # calculate the ground spacing distance (GSD) for each image in meters
         H = row[z_field]
         F = row.Focal_Length_mm
         img_w = row.Pixel_X_Dimension
         img_h = row.Pixel_Y_Dimension
+
+        # TODO: handle other RES UNITs. This assumes CM.
         sensor_w = ureg.convert(row.Est_Sensor_Width, row.Est_Sensor_HW_Unit, "mm")
         sensor_h = ureg.convert(row.Est_Sensor_Height, row.Est_Sensor_HW_Unit, "mm")
 
-        gsd_w = (H * sensor_w) / (F * img_w)
-        gsd_h = (H * sensor_h) / (F * img_h)
+        if height:
+            gsd_h = (H * sensor_h) / (F * img_h)
+            return gsd_h
+        else:
+            gsd_w = (H * sensor_w) / (F * img_w)
+            return gsd_w
 
-        print(f"gsd_w: {gsd_w}, gsd_h: {gsd_h}, returning: {max(gsd_w, gsd_h)}")
+    def apply_corner_gcps(self, in_gdf):
+        # Extract the ground spacing distance from each row of the fit_gdf
+        in_gdf["Corner_GCPS"] = in_gdf.apply(
+            lambda row: self._calc_corner_gcps(row), axis=1)
 
-        img_width = (H * sensor_w) / F
-        img_height = (H * sensor_h) / F
-        print(f"img_w/h: {img_width} / {img_height} meters")
+    def _calc_corner_gcps(self, row):
+        print(row.geometry)
+        print(row.Pixel_X_Dimension, row.Pixel_Y_Dimension, row.GSD_MAX)
+        print(row.Pixel_X_Dimension, row.Pixel_Y_Dimension)
 
-        # return the greater (coarser) value of gsd_w and gsd_h as float
-        return max(gsd_w, gsd_h)
+        # calculate the size of each image in meters
+        center_x = row.geometry.x
+        center_y = row.geometry.y
 
+
+        x_min = center_x - ((row.Pixel_X_Dimension * row.GSD_W) / 2)
+        x_max = center_x + ((row.Pixel_X_Dimension * row.GSD_W) / 2)
+        y_min = center_y - ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
+        y_max = center_y + ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
+
+        print(x_min, row.direction, math.radians(row.direction))
+
+        return str(row.GSD_MAX)
+
+    def _rotate_point_3d(point, angle, axis):
+        # RADIANS ONLY!
+        x, y, z = point
+        c, s = math.cos(angle), math.sin(angle)
+
+        if axis == 'x':
+            return x, y*c - z*s, y*s + z*c
+        elif axis == 'y':
+            return x*c + z*s, y, -x*s + z*c
+        elif axis == 'z':
+            return x*c - y*s, x*s + y*c, z
+        else:
+            raise ValueError("Invalid axis")
 
     """PLOTTING + WRITING FCNS"""
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
