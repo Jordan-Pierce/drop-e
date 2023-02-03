@@ -23,6 +23,7 @@ import folium
 import utm
 
 import rasterio
+from rasterio.enums import Resampling
 from rasterio.transform import from_gcps
 from rasterio.control import GroundControlPoint as GCP
 
@@ -117,6 +118,7 @@ class TowLine:
         self.smooth_usbl_traj = None
 
         self.max_gsd = 0.0
+        self.min_gsd = 0.0
         self.datetime_min = None
         self.datetime_max = None
 
@@ -149,17 +151,24 @@ class TowLine:
             self.apply_gsd(self.fit_gdf)
 
             self.max_gsd = self.fit_gdf.GSD_MAX.max()
+            self.min_gsd = self.fit_gdf.GSD_MIN.min()
+            self.mean_gsd = self.fit_gdf.GSD_MAX.mean()
+            self.mode_gsd = self.fit_gdf.GSD_MAX.mode().max()
+
             print(f"Average GSD: {self.fit_gdf.GSD_MAX.mean()}")
-            print(f"Max GSD: {self.max_gsd}")
+            print(f"Max GSD: {self.max_gsd}, Min GSD: {self.min_gsd}")
+            print(f"GSD mode: {self.fit_gdf.GSD_MAX.mode().max()}")
+            print(f"Min GSD mode: {self.fit_gdf.GSD_MIN.mode()}")
+
+            # get self.fit_gdf's GSD MAX mode
+
 
             self.apply_corner_gcps(self.fit_gdf)
-
-            self.fit_gdf.apply(
-                lambda row: self._write_image(row), axis=1)
 
         # self.calc_affine()
 
         # self.georeference()
+
         # self.orthorectify()
 
         # TODO: plotting / metadata
@@ -434,6 +443,8 @@ class TowLine:
 
         in_gdf['GSD_MAX'] = in_gdf[['GSD_W', 'GSD_H']].max(axis=1)
 
+        in_gdf['GSD_MIN'] = in_gdf[['GSD_W', 'GSD_H']].min(axis=1)
+
     def _calc_gsd(self, row, height=False, z_field='CamAlt'):  #TODO: hardcode CamAlt
         # calculate the ground spacing distance (GSD) for each image in meters
         H = row[z_field]
@@ -470,12 +481,6 @@ class TowLine:
         bottom = center_y - ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
         top = center_y + ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
 
-        #rot_bl = self._rotate_point_3d((x_min, y_min, 0), math.radians(row.direction), 'z')
-        #print(rot_bl)
-        #print(list(rot_bl)[0:2])
-
-        #from_gcps()
-
         tl = (left, top, 0)  # in lon, lat / x, y order
         bl = (left, bottom, 0)
         tr = (right, top, 0)
@@ -501,7 +506,11 @@ class TowLine:
 
         #self.plot_rotate(list(x_min, y_min), list(rot_bl)[0:2])
 
-        self._write_image(row, transform)
+        upsample_factor = self.mean_gsd / row.GSD_MAX
+
+        print(self.mean_gsd, upsample_factor)
+
+        self._write_image(row, transform, upsample_factor)
 
         return transform
 
@@ -620,13 +629,26 @@ class TowLine:
 
         plt.show()
 
-    def _write_image(self, row, transform):
+    def _write_image(self, row, transform, upsample_factor=1):
         # use rasterio to write image with crs and transform
         with rasterio.open(row.img_path, 'r+') as src:
-            src.transform = transform
-            src.crs = f'epsg:32655'
+            data=src.read()
+            src.transform = transform * transform.scale(
+                (src.width / data.shape[-1]),
+                (src.height / data.shape[-2])
+            )
+            src.crs = f'epsg:32655'  #TODO: Hardcode
             src.nodata = 0
 
             output_file = os.path.join(self.out_dir, row.img_name)
             with rasterio.open(output_file, 'w', **src.profile) as dst:
-                dst.write(src.read())
+                out_data = src.read(
+                    out_shape=(
+                        src.count,
+                        int(src.height * upsample_factor),
+                        int(src.width * upsample_factor)
+                    ),
+                    resampling=Resampling.bilinear
+                )
+
+                dst.write(out_data)
