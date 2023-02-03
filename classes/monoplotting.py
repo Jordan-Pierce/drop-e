@@ -24,7 +24,7 @@ import utm
 
 import rasterio
 from rasterio.transform import from_gcps
-from rasterio.control import GroundControlPoint
+from rasterio.control import GroundControlPoint as GCP
 
 
 # this is needed to supress a redundant warning from movingpandas
@@ -153,6 +153,9 @@ class TowLine:
             print(f"Max GSD: {self.max_gsd}")
 
             self.apply_corner_gcps(self.fit_gdf)
+
+            self.fit_gdf.apply(
+                lambda row: self._write_image(row), axis=1)
 
         # self.calc_affine()
 
@@ -368,13 +371,6 @@ class TowLine:
         # create a copy of the original gdf to work with...
         new_gdf = self.img_gdf.copy()
         print(new_gdf.head())
-        # TODO: Smooth or raw?
-
-        # TODO: filter Time outside of USBL range...
-        print(self.datetime_min)
-        print(new_gdf.index.min())
-
-        #TODO: pick it up here...
 
         # filter new_gdf based on DateTime field and self.datetime_min/max
         new_gdf = new_gdf[
@@ -385,14 +381,14 @@ class TowLine:
         print(f"{count} images were filtered based on their DateTime field.")
 
 
-        # TODO: Fit Images to USBL using DateTime
+
+        # Fit Images to USBL using DateTime
         new_gdf['Improved_Position'] = new_gdf.apply(
             lambda row: self.smooth_usbl_traj.get_position_at(
                 row.DateTime, method='interpolated'), axis=1)
 
         # store the vector lines represenintg the  "delta" between each EXIF point and
         # the USBL location at that datetime. These are strictly used for plotting.
-        # TODO: log metadata about shift distance, etc. to flag potential issues.
         delta_gdf = new_gdf[new_gdf.geometry.is_empty == False].copy()
 
         delta_gdf["Delta_LineString"] = delta_gdf.apply(
@@ -401,9 +397,11 @@ class TowLine:
         delta_gdf["Delta_LineLength"] = delta_gdf.apply(
             lambda row: row.Delta_LineString.length, axis=1)
 
+        # TODO: log metadata about shift distance, etc. to flag potential issues.
+        #print(delta_gdf['Delta_LineLength'].describe())
         print(f"Len filt / new: {len(delta_gdf)}, {len(new_gdf)}")
-        print(delta_gdf['Delta_LineLength'].describe())
 
+        # TODO: supersede geom, store geoms as txt?
         new_gdf.geometry = new_gdf.Improved_Position
         new_gdf.drop(columns=['Improved_Position'], inplace=True)
 
@@ -411,8 +409,6 @@ class TowLine:
         # Set the delta_gdf geometry to linestring
         delta_gdf.geometry = delta_gdf.Delta_LineString  # TODO: clean this gdf up?
         delta_gdf.drop(columns=['Delta_LineString', 'Improved_Position'], inplace=True)
-
-
 
         # TODO: Clean up this code, a lot of redundancy... (for testing)
 
@@ -458,40 +454,69 @@ class TowLine:
 
     def apply_corner_gcps(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
-        in_gdf["Corner_GCPS"] = in_gdf.apply(
-            lambda row: self._calc_corner_gcps(row), axis=1)
+        in_gdf["transform"] = in_gdf.apply(
+            lambda row: self._transform_image(row), axis=1)
 
-
-    def _calc_corner_gcps(self, row):
-        print(row.geometry)
-        print(row.Pixel_X_Dimension, row.Pixel_Y_Dimension, row.GSD_MAX)
-        print(row.Pixel_X_Dimension, row.Pixel_Y_Dimension)
+    def _transform_image(self, row):
+        #print(row.geometry)
+        #print(row.Pixel_X_Dimension, row.Pixel_Y_Dimension, row.GSD_MAX)
 
         # calculate the size of each image in meters
         center_x = row.geometry.x
         center_y = row.geometry.y
 
+        left = center_x - ((row.Pixel_X_Dimension * row.GSD_W) / 2)
+        right = center_x + ((row.Pixel_X_Dimension * row.GSD_W) / 2)
+        bottom = center_y - ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
+        top = center_y + ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
 
-        x_min = center_x - ((row.Pixel_X_Dimension * row.GSD_W) / 2)
-        x_max = center_x + ((row.Pixel_X_Dimension * row.GSD_W) / 2)
-        y_min = center_y - ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
-        y_max = center_y + ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
+        #rot_bl = self._rotate_point_3d((x_min, y_min, 0), math.radians(row.direction), 'z')
+        #print(rot_bl)
+        #print(list(rot_bl)[0:2])
 
-        print(x_min, row.direction, math.radians(row.direction))
+        #from_gcps()
 
-        return str(row.GSD_MAX)
+        tl = (left, top, 0)  # in lon, lat / x, y order
+        bl = (left, bottom, 0)
+        tr = (right, top, 0)
+        br = (right, bottom, 0)
+        cols, rows = row.Pixel_X_Dimension, row.Pixel_Y_Dimension
+        origin = (center_x, center_y, 0)
 
-    def _rotate_point_3d(point, angle, axis):
+        rot_tl = self._rotate_point_3d(tl, math.radians(row.direction), 'z', origin=origin)
+        rot_bl = self._rotate_point_3d(bl, math.radians(row.direction), 'z', origin=origin)
+        rot_tr = self._rotate_point_3d(tr, math.radians(row.direction), 'z', origin=origin)
+        rot_br = self._rotate_point_3d(br, math.radians(row.direction), 'z', origin=origin)
+
+        # TODO: figure out if 1/2 pixel shift is needed??
+        gcps = [
+            GCP(0, 0, *rot_tl),
+            GCP(0, cols, *rot_tr),
+            GCP(rows, 0, *rot_bl),
+            GCP(rows, cols, *rot_br)
+        ]
+
+        transform = from_gcps(gcps)
+        print(transform, type(transform))
+
+        #self.plot_rotate(list(x_min, y_min), list(rot_bl)[0:2])
+
+        self._write_image(row, transform)
+
+        return transform
+
+    def _rotate_point_3d(self, point, angle, axis, origin=(0, 0, 0)):
         # RADIANS ONLY!
         x, y, z = point
+        xo, yo, zo = origin
         c, s = math.cos(angle), math.sin(angle)
 
         if axis == 'x':
-            return x, y*c - z*s, y*s + z*c
+            return x, yo + (y-yo)*c - (z-zo)*s, zo + (y-yo)*s + (z-zo)*c
         elif axis == 'y':
-            return x*c + z*s, y, -x*s + z*c
+            return xo + (x-xo)*c + (z-zo)*s, y, zo - (x-xo)*s + (z-zo)*c
         elif axis == 'z':
-            return x*c - y*s, x*s + y*c, z
+            return xo + (x-xo)*c - (y-yo)*s, yo + (x-xo)*s + (y-yo)*c, z
         else:
             raise ValueError("Invalid axis")
 
@@ -585,3 +610,23 @@ class TowLine:
         # plt.show()
         if save_fig is True:
             plt.savefig(os.path.join(self.out_dir, "plot_usbl_fit.png"))
+
+    def plot_rotate(self, pts1, pts2, save_fig=False):
+        f, ax = plt.subplots()
+
+        # plot pts1 and pts2 as points...
+        plt.plot(pts1, 'o', color='red', label="OG")
+        plt.plot(pts2, 'o', color='blue', label="Rot")
+
+        plt.show()
+
+    def _write_image(self, row, transform):
+        # use rasterio to write image with crs and transform
+        with rasterio.open(row.img_path, 'r+') as src:
+            src.transform = transform
+            src.crs = f'epsg:32655'
+            src.nodata = 0
+
+            output_file = os.path.join(self.out_dir, row.img_name)
+            with rasterio.open(output_file, 'w', **src.profile) as dst:
+                dst.write(src.read())
