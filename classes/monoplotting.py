@@ -91,14 +91,17 @@ def rotate_point_3d(point, angle, axis):
 class TowLine:
     def __init__(
         self, img_dir, out_dir, usbl_path="None", datetime_field="DateTime",
+        pdop_field="Max_PDOP", filter_quartile=0.95,
         process_noise_std=1.0, measurement_noise_std=0.25
     ):
-
         self.img_dir = img_dir
         self.out_dir = out_dir
         self.usbl_path = usbl_path
 
         self.datetime_field = datetime_field
+        self.pdop_field = pdop_field
+
+        self.filter_quartile = filter_quartile
         self.process_noise_std = process_noise_std
         self.measurement_noise_std = measurement_noise_std
 
@@ -114,6 +117,8 @@ class TowLine:
         self.smooth_usbl_traj = None
 
         self.max_gsd = 0.0
+        self.datetime_min = None
+        self.datetime_max = None
 
         # Step 1: Read all images in img_dir, extract relevant EXIF data (geoexif),
         # and build a GeoPandasDataFrame (gdf) from this information...
@@ -123,9 +128,13 @@ class TowLine:
         # we will read that as a separate gdf, perform some optional filtering, extract
         # trajectory info, and fit the img_gdf to this new trajectory...
         if self.usbl_path is not None:
-            self.build_usbl_gdf()
+            self.build_usbl_gdf(
+                pdop_field=self.pdop_field, filter_quartile=self.filter_quartile
+            )
 
-            self.calc_trajectory(self.usbl_gdf, process_noise_std, measurement_noise_std)
+            self.calc_trajectory(
+                self.usbl_gdf, process_noise_std, measurement_noise_std
+            )
 
             self.fit_to_usbl()
 
@@ -166,24 +175,24 @@ class TowLine:
 
     """DATA INGEST FCNS"""
     def build_img_gdf(self):
-        geoexifs = []
-        for img in os.listdir(self.img_dir):
-            if img.endswith(allowed_img_ext):
-                geoexif = self._extract_img_exif(img)
+        imgs = [i for i in os.listdir(self.img_dir) if i.endswith(allowed_img_ext)]
+        print(f"Found {len(imgs)} images in {self.img_dir}...")
 
-                geoexifs.append(geoexif)
+        geoexifs = []
+        for img in imgs:
+            geoexif = self._extract_img_exif(img)
+            geoexifs.append(geoexif)
 
         epsg = utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
 
         img_df = pd.DataFrame(geoexifs)
 
-        # convert img_df to geodataframe, index by timestamp
+        # convert img_df to geodataframe, index by timestamp, use EXIF as geometry
         img_gdf = gpd.GeoDataFrame(
             img_df,
             geometry=gpd.points_from_xy(img_df.UTM_Easting, img_df.UTM_Northing),
             crs=epsg
         )
-
         img_gdf.index = img_gdf['DateTime']
 
         # TODO: how to reliably filter the "whiteboard images" w/o USBL timestamps?
@@ -193,12 +202,8 @@ class TowLine:
 
         self.img_gdf = img_gdf
 
-        #print(self.img_gdf.dtypes)
-        #print(self.img_gdf.head(5))
-        self._write_gdf(self.img_gdf, "img_gdf")
-
     def _extract_img_exif(self, img):
-        print(f"Reading GeoExif for {img}")
+        #print(f"Reading GeoExif for {img}")
 
         img_path = os.path.join(self.img_dir, img)
         exif_dict = {}
@@ -263,8 +268,8 @@ class TowLine:
 
                 exif_dict['UTM_Easting'] = east1
                 exif_dict['UTM_Northing'] = north1
-                exif_dict['UTM_Zone_Estimated'] = str(zone) + zoneLetter
-                exif_dict['UTM_EPSG_Estimated'] = utm_epsg_from_latlot(
+                exif_dict['Estimated_UTM_Zone'] = str(zone) + zoneLetter
+                exif_dict['Estimated_UTM_EPSG'] = utm_epsg_from_latlot(
                 exif_dict['GPS_Latitude_DD'], exif_dict['GPS_Longitude_DD']
                 )
             else:
@@ -284,17 +289,26 @@ class TowLine:
 
         # filter outliers by keeping lower quartile of PDOP values
         max_pdop = usbl_gdf[pdop_field].quantile(filter_quartile)
+        count = len(usbl_gdf) - len(usbl_gdf[usbl_gdf[pdop_field] < max_pdop])
         usbl_gdf = usbl_gdf[usbl_gdf[pdop_field] < max_pdop]
 
-        # TODO: metadata on how many were filtered...
-        print(f"filter_quartile set to {filter_quartile}, this will filter all PDOP \
-            values below {max_pdop}")
+        print(f"--filter_quartile of {filter_quartile} allows a max PDOP of {max_pdop}.")
+        print(f"{count} USBL pings were filtered based on their {pdop_field} field.")
+
+        # TODO: Consider how to handle dates... this parser has already failed once,
+        # and has some heavy overhead. It may be better to just prompt user for a
+        # date format string and use strptime instead...
 
         # parse datetime, set as index
         usbl_gdf["datetime_field"] = usbl_gdf[self.datetime_field].apply(
             lambda x: dateutil.parser.parse(x)
         )
         usbl_gdf.index = usbl_gdf["datetime_field"]
+
+        # these fill be used to filter out the images that don't have USBL data during
+        # the fit procedure...
+        self.datetime_min = usbl_gdf["datetime_field"].min()
+        self.datetime_max = usbl_gdf["datetime_field"].max()
 
         self.usbl_gdf = usbl_gdf
 
@@ -355,7 +369,21 @@ class TowLine:
         new_gdf = self.img_gdf.copy()
         print(new_gdf.head())
         # TODO: Smooth or raw?
+
         # TODO: filter Time outside of USBL range...
+        print(self.datetime_min)
+        print(new_gdf.index.min())
+
+        #TODO: pick it up here...
+
+        # filter new_gdf based on DateTime field and self.datetime_min/max
+        new_gdf = new_gdf[
+            (new_gdf.DateTime >= self.datetime_min) & (new_gdf.DateTime <= self.datetime_max)
+        ]
+        # new_gdf = new_gdf.loc[self.datetime_min:self.datetime_max]
+        count = len(self.img_gdf) - len(new_gdf)
+        print(f"{count} images were filtered based on their DateTime field.")
+
 
         # TODO: Fit Images to USBL using DateTime
         new_gdf['Improved_Position'] = new_gdf.apply(
@@ -364,6 +392,7 @@ class TowLine:
 
         # store the vector lines represenintg the  "delta" between each EXIF point and
         # the USBL location at that datetime. These are strictly used for plotting.
+        # TODO: log metadata about shift distance, etc. to flag potential issues.
         delta_gdf = new_gdf[new_gdf.geometry.is_empty == False].copy()
 
         delta_gdf["Delta_LineString"] = delta_gdf.apply(
@@ -383,13 +412,11 @@ class TowLine:
         delta_gdf.geometry = delta_gdf.Delta_LineString  # TODO: clean this gdf up?
         delta_gdf.drop(columns=['Delta_LineString', 'Improved_Position'], inplace=True)
 
-        # TODO: log metadata about shift distance, etc. to flag potential issues.
-
-        # merge the direction values from the usbl_gdf into the new_gdf
-        print (self.smooth_usbl_df['direction'].head())
 
 
-        # fit Z info too
+        # TODO: Clean up this code, a lot of redundancy... (for testing)
+
+        # fit the direction (degrees) and Z (height) values from USBL
         if self.smooth_usbl_df is not None:
             new_gdf2 = pd.merge_asof(new_gdf, self.smooth_usbl_df[['direction']], left_index=True, right_index=True)
             z_gdf = self._zLookup(new_gdf2, self.smooth_usbl_df, z_field='CamAlt', datetime_field='TimeCor') # TODO: fix hardcodes
@@ -433,6 +460,7 @@ class TowLine:
         # Extract the ground spacing distance from each row of the fit_gdf
         in_gdf["Corner_GCPS"] = in_gdf.apply(
             lambda row: self._calc_corner_gcps(row), axis=1)
+
 
     def _calc_corner_gcps(self, row):
         print(row.geometry)
