@@ -18,7 +18,7 @@ import geopandas as gpd
 import movingpandas as mpd
 from movingpandas.trajectory_smoother import KalmanSmootherCV
 
-from shapely.geometry import Point, LineString
+from shapely.geometry import Point, LineString, Polygon
 import folium
 import utm
 
@@ -107,7 +107,8 @@ class TowLine:
         self.measurement_noise_std = measurement_noise_std
 
         self.img_gdf = None  # the default primary gdf for imagery
-        self.fit_img_gdf = None  # if USBL is available, the primary gdf for imagery
+        self.fit_gdf = None  # if USBL is available, the primary gdf for imagery
+        self.transforms = {}
 
         # only one will be populated...
         self.raw_usbl_df = None
@@ -117,10 +118,14 @@ class TowLine:
         self.raw_usbl_traj = None
         self.smooth_usbl_traj = None
 
+        self.epsg_str = "None"
+        self.max_gsd_mode = 0.0
         self.max_gsd = 0.0
         self.min_gsd = 0.0
         self.datetime_min = None
         self.datetime_max = None
+
+        self.write_images = False
 
         # Step 1: Read all images in img_dir, extract relevant EXIF data (geoexif),
         # and build a GeoPandasDataFrame (gdf) from this information...
@@ -140,6 +145,8 @@ class TowLine:
 
             self.fit_to_usbl()
 
+            self.apply_gsd(self.fit_gdf)
+
         # ... otherwise, just calculate the trajectory from the img_gdf and proceed
         else:
             self.calc_trajectory(self.img_gdf, process_noise_std, measurement_noise_std)
@@ -150,40 +157,32 @@ class TowLine:
         if self.fit_gdf is not None:
             self.apply_gsd(self.fit_gdf)
 
-            self.max_gsd = self.fit_gdf.GSD_MAX.max()
-            self.min_gsd = self.fit_gdf.GSD_MIN.min()
-            self.mean_gsd = self.fit_gdf.GSD_MAX.mean()
-            self.mode_gsd = self.fit_gdf.GSD_MAX.mode().max()
+            self.max_gsd_mode = self.fit_gdf.GSD_MAX.mode().max()
+            print(f"Mode of Max GSD: {self.max_gsd_mode}")
 
-            print(f"Average GSD: {self.fit_gdf.GSD_MAX.mean()}")
-            print(f"Max GSD: {self.max_gsd}, Min GSD: {self.min_gsd}")
-            print(f"GSD mode: {self.fit_gdf.GSD_MAX.mode().max()}")
-            print(f"Min GSD mode: {self.fit_gdf.GSD_MIN.mode()}")
-
-            # get self.fit_gdf's GSD MAX mode
-
+            self.apply_upscale_factor(self.fit_gdf)
 
             self.apply_corner_gcps(self.fit_gdf)
 
-        # self.calc_affine()
+            self.apply_transform(self.fit_gdf)
 
-        # self.georeference()
+            if self.write_images:
+                self.georeference_images(self.fit_gdf)
 
-        # self.orthorectify()
+        else:
+            self.apply_gsd(self.img_gdf)
 
-        # TODO: plotting / metadata
-        # self.write_external_params()
-        # self.write_internal_params()
-        # self.preview_images()
-        # self.plot_traj_smoothing()
-        # self.plot_usbl_fit()
-        # self.traj_plot_3d()
+            self.mode_gsd = self.img_gdf.GSD_MAX.mode().max()
+            print(f"Mode of Max GSD: {self.mode_gsd}")
 
-        # TODO: writing images / deltas
-        # if write_images == True:
-        #    self.write_georef()
-        #    self.write_ortho()
-        #    self.write_gdfs()
+            self.apply_upscale_factor(self.img_gdf)
+
+            self.apply_corner_gcps(self.img_gdf)
+
+            self.apply_transform(self.img_gdf)
+
+            if self.write_images:
+                self.georeference_images(self.img_gdf)
 
     """DATA INGEST FCNS"""
     def build_img_gdf(self):
@@ -196,6 +195,7 @@ class TowLine:
             geoexifs.append(geoexif)
 
         epsg = utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
+        self.epsg_str = f"epsg:{epsg}"
 
         img_df = pd.DataFrame(geoexifs)
 
@@ -445,7 +445,7 @@ class TowLine:
 
         in_gdf['GSD_MIN'] = in_gdf[['GSD_W', 'GSD_H']].min(axis=1)
 
-    def _calc_gsd(self, row, height=False, z_field='CamAlt'):  #TODO: hardcode CamAlt
+    def _calc_gsd(self, row, height=False, z_field='CamAlt'):
         # calculate the ground spacing distance (GSD) for each image in meters
         H = row[z_field]
         F = row.Focal_Length_mm
@@ -463,15 +463,17 @@ class TowLine:
             gsd_w = (H * sensor_w) / (F * img_w)
             return gsd_w
 
+    def apply_upscale_factor(self, in_gdf):
+        # Extract the ground spacing distance from each row of the fit_gdf
+        in_gdf["Upscale_Factor"] = in_gdf.apply(
+            lambda row: self.max_gsd_mode / row.GSD_MAX, axis=1)
+
     def apply_corner_gcps(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
-        in_gdf["transform"] = in_gdf.apply(
-            lambda row: self._transform_image(row), axis=1)
+        in_gdf["bbox"] = in_gdf.apply(
+            lambda row: self._rotate_corner_gcps(row), axis=1)
 
-    def _transform_image(self, row):
-        #print(row.geometry)
-        #print(row.Pixel_X_Dimension, row.Pixel_Y_Dimension, row.GSD_MAX)
-
+    def _rotate_corner_gcps(self, row):
         # calculate the size of each image in meters
         center_x = row.geometry.x
         center_y = row.geometry.y
@@ -481,38 +483,24 @@ class TowLine:
         bottom = center_y - ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
         top = center_y + ((row.Pixel_Y_Dimension * row.GSD_H) / 2)
 
-        tl = (left, top, 0)  # in lon, lat / x, y order
         bl = (left, bottom, 0)
-        tr = (right, top, 0)
         br = (right, bottom, 0)
+        tl = (left, top, 0)
+        tr = (right, top, 0)
         cols, rows = row.Pixel_X_Dimension, row.Pixel_Y_Dimension
         origin = (center_x, center_y, 0)
 
-        rot_tl = self._rotate_point_3d(tl, math.radians(row.direction), 'z', origin=origin)
+        rot_tl = self._rotate_point_3d(tl, math.radians(row.direction), 'z', origin=origin)  # NOTE: may want to cut the custom code here in favor of a shapely poly rotation...
         rot_bl = self._rotate_point_3d(bl, math.radians(row.direction), 'z', origin=origin)
         rot_tr = self._rotate_point_3d(tr, math.radians(row.direction), 'z', origin=origin)
         rot_br = self._rotate_point_3d(br, math.radians(row.direction), 'z', origin=origin)
 
-        # TODO: figure out if 1/2 pixel shift is needed??
-        gcps = [
-            GCP(0, 0, *rot_tl),
-            GCP(0, cols, *rot_tr),
-            GCP(rows, 0, *rot_bl),
-            GCP(rows, cols, *rot_br)
-        ]
+        corners = [Point(rot_bl), Point(rot_br), Point(rot_tr), Point(rot_tl)]
 
-        transform = from_gcps(gcps)
-        print(transform, type(transform))
+        # create shapely polygon from the corners
+        rot_bbox = Polygon([[p.x, p.y] for p in corners])
 
-        #self.plot_rotate(list(x_min, y_min), list(rot_bl)[0:2])
-
-        upsample_factor = self.mean_gsd / row.GSD_MAX
-
-        print(self.mean_gsd, upsample_factor)
-
-        self._write_image(row, transform, upsample_factor)
-
-        return transform
+        return rot_bbox
 
     def _rotate_point_3d(self, point, angle, axis, origin=(0, 0, 0)):
         # RADIANS ONLY!
@@ -529,10 +517,37 @@ class TowLine:
         else:
             raise ValueError("Invalid axis")
 
+    def apply_transform(self, in_gdf):
+        # Extract the ground spacing distance from each row of the fit_gdf
+        in_gdf.apply(lambda row: self._calc_transform(row), axis=1)
+
+    def _calc_transform(self, row):
+        # print(len(row.bbox.exterior.coords[0:4]))
+        tl, tr, br, bl = row.bbox.exterior.coords[0:4]
+        cols, rows = row.Pixel_X_Dimension, row.Pixel_Y_Dimension
+
+        # TODO: figure out if 1/2 pixel shift is needed??
+        gcps = [
+            GCP(0, 0, *tl),
+            GCP(0, cols, *tr),
+            GCP(rows, 0, *bl),
+            GCP(rows, cols, *br)
+        ]
+
+        transform = from_gcps(gcps)
+        # print(transform, type(transform))
+
+        self.transforms[row.img_name] = transform
+
+    def georeference_images(self, in_gdf):
+        # Extract the ground spacing distance from each row of the fit_gdf
+        in_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
+
+
     """PLOTTING + WRITING FCNS"""
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
-        target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref'], axis=1, inplace=True, errors='ignore')
+        target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'], axis=1, inplace=True, errors='ignore')
 
         if format == "GPKG":
             out_path = os.path.join(self.out_dir, f"{basename}.gpkg")
@@ -629,15 +644,16 @@ class TowLine:
 
         plt.show()
 
-    def _write_image(self, row, transform, upsample_factor=1):
+    def _scale_and_write_image(self, row):
         # use rasterio to write image with crs and transform
         with rasterio.open(row.img_path, 'r+') as src:
             data=src.read()
-            src.transform = transform * transform.scale(
+            img_transform = self.transforms[row.img_name]
+            src.transform = img_transform * img_transform.scale(
                 (src.width / data.shape[-1]),
                 (src.height / data.shape[-2])
             )
-            src.crs = f'epsg:32655'  #TODO: Hardcode
+            src.crs = self.epsg_str
             src.nodata = 0
 
             output_file = os.path.join(self.out_dir, row.img_name)
@@ -645,10 +661,11 @@ class TowLine:
                 out_data = src.read(
                     out_shape=(
                         src.count,
-                        int(src.height * upsample_factor),
-                        int(src.width * upsample_factor)
+                        int(src.height * row.Upscale_Factor),
+                        int(src.width * row.Upscale_Factor)
                     ),
                     resampling=Resampling.bilinear
                 )
 
                 dst.write(out_data)
+        print(f"Finished writing {row.img_name} to {output_file}")
