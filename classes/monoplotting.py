@@ -74,21 +74,6 @@ def dms_to_dd(dms, direction, verbose=False) -> float:
     return dd
 
 
-def rotate_point_3d(point, angle, axis):
-    # RADIANS ONLY!
-    x, y, z = point
-    c, s = math.cos(angle), math.sin(angle)
-
-    if axis == 'x':
-        return x, y*c - z*s, y*s + z*c
-    elif axis == 'y':
-        return x*c + z*s, y, -x*s + z*c
-    elif axis == 'z':
-        return x*c - y*s, x*s + y*c, z
-    else:
-        raise ValueError("Invalid axis")
-
-
 class TowLine:
     def __init__(
         self, img_dir, out_dir, usbl_path="None", datetime_field="DateTime",
@@ -165,6 +150,11 @@ class TowLine:
             self.apply_corner_gcps(self.fit_gdf)
 
             self.apply_transform(self.fit_gdf)
+
+            self.bbox_gdf = self.fit_gdf[['img_path', 'img_name', 'bbox']].copy()
+            self.bbox_gdf.geometry = self.bbox_gdf.bbox
+
+            self._write_gdf(self.bbox_gdf, 'bbox')
 
             if self.write_images:
                 self.georeference_images(self.fit_gdf)
@@ -470,8 +460,8 @@ class TowLine:
 
     def apply_corner_gcps(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
-        in_gdf["bbox"] = in_gdf.apply(
-            lambda row: self._rotate_corner_gcps(row), axis=1)
+
+        in_gdf['bbox'] = in_gdf.apply(lambda row: self._rotate_corner_gcps(row), axis=1)
 
     def _rotate_corner_gcps(self, row):
         # calculate the size of each image in meters
@@ -518,7 +508,7 @@ class TowLine:
             raise ValueError("Invalid axis")
 
     def apply_transform(self, in_gdf):
-        # Extract the ground spacing distance from each row of the fit_gdf
+        # Create an affine transform for each image
         in_gdf.apply(lambda row: self._calc_transform(row), axis=1)
 
     def _calc_transform(self, row):
