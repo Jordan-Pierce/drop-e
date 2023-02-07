@@ -21,10 +21,16 @@ if __name__ == "__main__":
                 information. Default value is 'DateTime'.")
     parser.add_argument("--pdop_field", "-pf",
         type=str,
-        default="Max_PDOP",
+        default=None,
         help="Name of the field in the USBL attribute table that contains some form \
             of positional accuracy, most often in the form of a PDOP value. Default \
             value is 'Max_PDOP'.")
+    parser.add_argument("--elevation_field", "-ef",
+                        type=str,
+                        default="CaCorAlt",
+                        help="Name of the field in the USBL attribute table that \
+                        contains elevation (depth) values. Default value is \
+                        'CaCorAlt'.")
     parser.add_argument("--filter_quartile", "-f",
         type=float,
         default=0.95,
@@ -50,8 +56,9 @@ if __name__ == "__main__":
     # Create a TowLine object, which kicks off a processing chain...
 
     towline = TowLine(args.image_dir, args.out_dir, args.usbl_path,
-                    args.datetime_field, args.pdop_field, args.filter_quartile,
-                    args.process_noise_std, args.measurement_noise_std)
+                    args.datetime_field, args.pdop_field, args.elevation_field,
+                    args.filter_quartile, args.process_noise_std,
+                    args.measurement_noise_std)
 
     # Dump the GDFs...
     towline.dump_gdfs()

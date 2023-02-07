@@ -77,7 +77,7 @@ def dms_to_dd(dms, direction, verbose=False) -> float:
 class TowLine:
     def __init__(
         self, img_dir, out_dir, usbl_path="None", datetime_field="DateTime",
-        pdop_field="Max_PDOP", filter_quartile=0.95,
+        pdop_field=None, alt_field="CaAltDepth", filter_quartile=0.95,
         process_noise_std=1.0, measurement_noise_std=0.25
     ):
         self.img_dir = img_dir
@@ -86,6 +86,7 @@ class TowLine:
 
         self.datetime_field = datetime_field
         self.pdop_field = pdop_field
+        self.alt_field = alt_field
 
         self.filter_quartile = filter_quartile
         self.process_noise_std = process_noise_std
@@ -102,15 +103,16 @@ class TowLine:
         # only one will be populated...
         self.raw_usbl_traj = None
         self.smooth_usbl_traj = None
+        self.smooth_usbl_traj_line =  None
 
-        self.epsg_str = "None"
+        self.epsg_str = None
         self.max_gsd_mode = 0.0
         self.max_gsd = 0.0
         self.min_gsd = 0.0
         self.datetime_min = None
         self.datetime_max = None
 
-        self.write_images = False
+        self.write_images = True
 
         # Step 1: Read all images in img_dir, extract relevant EXIF data (geoexif),
         # and build a GeoPandasDataFrame (gdf) from this information...
@@ -176,6 +178,11 @@ class TowLine:
 
     """DATA INGEST FCNS"""
     def build_img_gdf(self):
+        # TODO: how to reliably filter the "whiteboard images" w/o USBL timestamps?
+        # IDEA: timedelta from movingpandas trajectory, reverse sort, and drop under
+        # a certain threshold (or percentile). This assumes whiteboards are always first
+        # in the sequence, which is a safe assumption for now, but maybe add reverse too?
+
         imgs = [i for i in os.listdir(self.img_dir) if i.endswith(allowed_img_ext)]
         print(f"Found {len(imgs)} images in {self.img_dir}...")
 
@@ -184,25 +191,30 @@ class TowLine:
             geoexif = self._extract_img_exif(img)
             geoexifs.append(geoexif)
 
-        epsg = utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
-        self.epsg_str = f"epsg:{epsg}"
 
-        img_df = pd.DataFrame(geoexifs)
+        if geoexifs[0]['GPS_Latitude_DMS'] is not None and geoexifs[0]['GPS_Longitude_DMS'] is not None:
+            epsg = utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
+            self.epsg_str = f"epsg:{epsg}"
 
-        # convert img_df to geodataframe, index by timestamp, use EXIF as geometry
-        img_gdf = gpd.GeoDataFrame(
-            img_df,
-            geometry=gpd.points_from_xy(img_df.UTM_Easting, img_df.UTM_Northing),
-            crs=epsg
-        )
-        img_gdf.index = img_gdf['DateTime']
+            img_df = pd.DataFrame(geoexifs)
 
-        # TODO: how to reliably filter the "whiteboard images" w/o USBL timestamps?
-        # IDEA: timedelta from movingpandas trajectory, reverse sort, and drop under
-        # a certain threshold (or percentile). This assumes whiteboards are always first
-        # in the sequence, which is a safe assumption for now, but maybe add reverse too?
+            # convert img_df to geodataframe, index by timestamp, use EXIF as geometry
+            img_gdf = gpd.GeoDataFrame(
+                img_df,
+                geometry=gpd.points_from_xy(img_df.UTM_Easting, img_df.UTM_Northing),
+                crs=epsg
+            )
+            img_gdf.index = img_gdf['DateTime']
 
-        self.img_gdf = img_gdf
+            self.img_gdf = img_gdf
+
+        else:
+            print(f"EPSG can not be inferred from image EXIF data...")
+
+            img_df = pd.DataFrame(geoexifs)
+            img_df.index = img_df['DateTime']
+
+            self.img_gdf = img_df
 
     def _extract_img_exif(self, img):
         #print(f"Reading GeoExif for {img}")
@@ -284,18 +296,21 @@ class TowLine:
         return exif_dict
 
     def build_usbl_gdf(
-        self, pdop_field="Max_PDOP", filter_quartile=0.95
+        self, pdop_field=None, filter_quartile=0.95
     ):
         # read USBL data into GeoPandas
         usbl_gdf = gpd.read_file(self.usbl_path)
 
         # filter outliers by keeping lower quartile of PDOP values
-        max_pdop = usbl_gdf[pdop_field].quantile(filter_quartile)
-        count = len(usbl_gdf) - len(usbl_gdf[usbl_gdf[pdop_field] < max_pdop])
-        usbl_gdf = usbl_gdf[usbl_gdf[pdop_field] < max_pdop]
+        if self.pdop_field is not None:
+            max_pdop = usbl_gdf[pdop_field].quantile(filter_quartile)
+            count = len(usbl_gdf) - len(usbl_gdf[usbl_gdf[pdop_field] < max_pdop])
+            usbl_gdf = usbl_gdf[usbl_gdf[pdop_field] < max_pdop]
 
-        print(f"--filter_quartile of {filter_quartile} allows a max PDOP of {max_pdop}.")
-        print(f"{count} USBL pings were filtered based on their {pdop_field} field.")
+            print(f"--filter_quartile of {filter_quartile} allows a max PDOP of {max_pdop}.")
+            print(f"{count} USBL pings were filtered based on their {pdop_field} field.")
+        else:
+            print ("WARNING: No PDOP field specified. No filtering will be performed.")
 
         # TODO: Consider how to handle dates... this parser has already failed once,
         # and has some heavy overhead. It may be better to just prompt user for a
@@ -314,9 +329,15 @@ class TowLine:
 
         self.usbl_gdf = usbl_gdf
 
+        if self.epsg_str is None:
+            print(self.epsg_str)
+            self.epsg_str = str(usbl_gdf.crs)
+
+
     """TRAJECTORY FCNS"""
     def calc_trajectory(self, pt_gdf, process_noise_std=1.0, measurement_noise_std=0.25):
         # calculate trajectory information with MovingPandas
+        print(f"EPSG: {self.epsg_str}")
         traj = mpd.Trajectory(pt_gdf, 1, t="datetime_field", crs=pt_gdf.crs)
 
         traj.add_direction()
@@ -343,6 +364,9 @@ class TowLine:
 
             self.smooth_usbl_traj = s_traj
             self.smooth_usbl_df = s_traj.to_point_gdf()
+            self.smooth_usbl_df.crs = self.epsg_str
+            self.smooth_usbl_traj_line = s_traj.to_line_gdf()
+            self.smooth_usbl_traj_line.crs = self.epsg_str
 
         else:
             print(f"Either process_noise_std or measurement_noise_std is set to 0.0, \
@@ -414,10 +438,10 @@ class TowLine:
         # fit the direction (degrees) and Z (height) values from USBL
         if self.smooth_usbl_df is not None:
             new_gdf2 = pd.merge_asof(new_gdf, self.smooth_usbl_df[['direction']], left_index=True, right_index=True)
-            z_gdf = self._zLookup(new_gdf2, self.smooth_usbl_df, z_field='CamAlt', datetime_field='TimeCor') # TODO: fix hardcodes
+            z_gdf = self._zLookup(new_gdf2, self.smooth_usbl_df, z_field=self.alt_field, datetime_field=self.datetime_field)
         else:
             new_gdf2 = pd.merge_asof(new_gdf, self.raw_usbl_df[['direction']], left_index=True, right_index=True)
-            z_gdf = self._zLookup(new_gdf2, self.raw_usbl_df, z_field='CamAlt', datetime_field='TimeCor')
+            z_gdf = self._zLookup(new_gdf2, self.raw_usbl_df, z_field=self.alt_field, datetime_field=self.datetime_field)
 
         self.delta_gdf = delta_gdf
         self.fit_gdf = z_gdf
@@ -554,17 +578,20 @@ class TowLine:
         if self.fit_gdf is not None:
             self._write_gdf(self.fit_gdf, "fit_gdf", format="GPKG", index=False)
 
-        if self.img_gdf is not None:
-            self._write_gdf(self.img_gdf, "img_gdf", format="GPKG", index=False)
+        #if self.img_gdf is not None:
+        #    self._write_gdf(self.img_gdf, "img_gdf", format="GPKG", index=False)
 
         if self.delta_gdf is not None:
             self._write_gdf(self.delta_gdf, "delta_gdf", format="GPKG", index=False)
 
-        if self.raw_usbl_df is not None:
-            self._write_gdf(self.raw_usbl_df, "raw_usbl_df", format="GPKG", index=False)
+        #if self.raw_usbl_df is not None:
+        #    self._write_gdf(self.raw_usbl_df, "raw_usbl_df", format="GPKG", index=False)
 
-        if self.smooth_usbl_df is not None:
-            self._write_gdf(self.smooth_usbl_df, "smooth_usbl_df", format="GPKG", index=False)
+        #if self.smooth_usbl_df is not None:
+        #    self._write_gdf(self.smooth_usbl_df, "smooth_usbl_df", format="GPKG", index=False)
+
+        if self.smooth_usbl_traj_line is not None:
+            self._write_gdf(self.smooth_usbl_traj_line, "smooth_usbl_traj_line", format="GPKG", index=False)
 
     def plot_smoothing_operation(self, save_fig=False):
         f, ax = plt.subplots()
