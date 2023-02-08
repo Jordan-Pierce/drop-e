@@ -1,6 +1,6 @@
 import os
+import re
 import math
-import warnings
 import pint
 
 from datetime import datetime
@@ -27,8 +27,7 @@ from rasterio.enums import Resampling
 from rasterio.transform import from_gcps
 from rasterio.control import GroundControlPoint as GCP
 
-
-# this is needed to supress a redundant warning from movingpandas
+import warnings
 warnings.filterwarnings("ignore", message="CRS not set for some of the concatenation inputs.")
 
 allowed_img_ext = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
@@ -78,7 +77,7 @@ class TowLine:
     def __init__(
         self, img_dir, out_dir, usbl_path="None", datetime_field="DateTime",
         pdop_field=None, alt_field="CaAltDepth", filter_quartile=0.95,
-        process_noise_std=1.0, measurement_noise_std=0.25
+        process_noise_std=1.0, measurement_noise_std=0.25, preview_mode=False
     ):
         self.img_dir = img_dir
         self.out_dir = out_dir
@@ -91,6 +90,7 @@ class TowLine:
         self.filter_quartile = filter_quartile
         self.process_noise_std = process_noise_std
         self.measurement_noise_std = measurement_noise_std
+        self.preview_mode = preview_mode
 
         self.img_gdf = None  # the default primary gdf for imagery
         self.fit_gdf = None  # if USBL is available, the primary gdf for imagery
@@ -99,6 +99,8 @@ class TowLine:
         # only one will be populated...
         self.raw_usbl_df = None
         self.smooth_usbl_df = None
+
+        self.delta_gdf = None
 
         # only one will be populated...
         self.raw_usbl_traj = None
@@ -111,8 +113,6 @@ class TowLine:
         self.min_gsd = 0.0
         self.datetime_min = None
         self.datetime_max = None
-
-        self.write_images = True
 
         # Step 1: Read all images in img_dir, extract relevant EXIF data (geoexif),
         # and build a GeoPandasDataFrame (gdf) from this information...
@@ -158,7 +158,7 @@ class TowLine:
 
             self._write_gdf(self.bbox_gdf, 'bbox')
 
-            if self.write_images:
+            if not self.preview_mode:
                 self.georeference_images(self.fit_gdf)
 
         else:
@@ -173,7 +173,7 @@ class TowLine:
 
             self.apply_transform(self.img_gdf)
 
-            if self.write_images:
+            if not self.preview_mode:
                 self.georeference_images(self.img_gdf)
 
     """DATA INGEST FCNS"""
@@ -256,9 +256,9 @@ class TowLine:
 
             # Infer DateTime from Exif
             exif_dict['DateTime_Original'] = img_exif.get('datetime_original')
-            exif_dict["DateTime"] = dateutil.parser.parse(exif_dict['DateTime_Original'])
-            exif_dict["Minute"] = exif_dict["DateTime"].minute
-            exif_dict["Second"] = exif_dict["DateTime"].second
+            #exif_dict["DateTime"] = dateutil.parser.parse(exif_dict['DateTime_Original'])
+            exif_dict['DateTime'] = datetime.strptime(re.sub('[/.:]', '-', exif_dict['DateTime_Original']), '%Y-%m-%d %H-%M-%S')
+            print(exif_dict['DateTime'], exif_dict['DateTime_Original'])
 
             # Pull GPS tags in Lat/Long
             exif_dict['GPS_Latitude_DMS'] = img_exif.get('GPS_Latitude')
@@ -317,15 +317,18 @@ class TowLine:
         # date format string and use strptime instead...
 
         # parse datetime, set as index
-        usbl_gdf["datetime_field"] = usbl_gdf[self.datetime_field].apply(
-            lambda x: dateutil.parser.parse(x)
+        #usbl_gdf["datetime_field"] = usbl_gdf[self.datetime_field].apply(
+        #    lambda x: dateutil.parser.parse(x)
+        #)
+        usbl_gdf["datetime_idx"] = usbl_gdf[self.datetime_field].apply(
+            lambda x: datetime.strptime(re.sub('[/.:]', '-', x), '%Y-%m-%d %H-%M-%S')
         )
-        usbl_gdf.index = usbl_gdf["datetime_field"]
+        usbl_gdf.index = usbl_gdf['datetime_idx']
 
         # these fill be used to filter out the images that don't have USBL data during
         # the fit procedure...
-        self.datetime_min = usbl_gdf["datetime_field"].min()
-        self.datetime_max = usbl_gdf["datetime_field"].max()
+        self.datetime_min = usbl_gdf["datetime_idx"].min()
+        self.datetime_max = usbl_gdf["datetime_idx"].max()
 
         self.usbl_gdf = usbl_gdf
 
@@ -338,7 +341,7 @@ class TowLine:
     def calc_trajectory(self, pt_gdf, process_noise_std=1.0, measurement_noise_std=0.25):
         # calculate trajectory information with MovingPandas
         print(f"EPSG: {self.epsg_str}")
-        traj = mpd.Trajectory(pt_gdf, 1, t="datetime_field", crs=pt_gdf.crs)
+        traj = mpd.Trajectory(pt_gdf, 1, t="datetime_idx", crs=pt_gdf.crs)
 
         traj.add_direction()
         traj.add_speed()
@@ -403,38 +406,46 @@ class TowLine:
         count = len(self.img_gdf) - len(new_gdf)
         print(f"{count} images were filtered based on their DateTime field.")
 
-
+        print(new_gdf.head())
 
         # Fit Images to USBL using DateTime
-        new_gdf['Improved_Position'] = new_gdf.apply(
-            lambda row: self.smooth_usbl_traj.get_position_at(
-                row.DateTime, method='interpolated'), axis=1)
+        new_gdf['Improved_Position'] = new_gdf.apply(lambda row: self.smooth_usbl_traj.get_position_at(row.DateTime, method='interpolated'), axis=1)
+
+        print(new_gdf['Improved_Position'])
+
+
 
         # store the vector lines represenintg the  "delta" between each EXIF point and
         # the USBL location at that datetime. These are strictly used for plotting.
-        delta_gdf = new_gdf[new_gdf.geometry.is_empty == False].copy()
+        if 'geometry' in new_gdf.columns:
+            delta_gdf = new_gdf[new_gdf.geometry.is_empty == False].copy()
 
-        delta_gdf["Delta_LineString"] = delta_gdf.apply(
-            lambda row: LineString([row.geometry, row.Improved_Position]), axis=1)
+            delta_gdf["Delta_LineString"] = delta_gdf.apply(
+                lambda row: LineString([row.geometry, row.Improved_Position]), axis=1)
 
-        delta_gdf["Delta_LineLength"] = delta_gdf.apply(
-            lambda row: row.Delta_LineString.length, axis=1)
+            delta_gdf["Delta_LineLength"] = delta_gdf.apply(
+                lambda row: row.Delta_LineString.length, axis=1)
 
-        # TODO: log metadata about shift distance, etc. to flag potential issues.
-        #print(delta_gdf['Delta_LineLength'].describe())
-        print(f"Len filt / new: {len(delta_gdf)}, {len(new_gdf)}")
+            # TODO: log metadata about shift distance, etc. to flag potential issues.
+            #print(delta_gdf['Delta_LineLength'].describe())
+            print(f"Len filt / new: {len(delta_gdf)}, {len(new_gdf)}")
 
-        # TODO: supersede geom, store geoms as txt?
-        new_gdf.geometry = new_gdf.Improved_Position
-        new_gdf.drop(columns=['Improved_Position'], inplace=True)
+            # Set the delta_gdf geometry to linestring
+            delta_gdf.geometry = delta_gdf.Delta_LineString  # TODO: clean this gdf up?
+            delta_gdf.drop(columns=['Delta_LineString', 'Improved_Position'], inplace=True)
 
-        new_gdf.sort_index(inplace=True)
-        # Set the delta_gdf geometry to linestring
-        delta_gdf.geometry = delta_gdf.Delta_LineString  # TODO: clean this gdf up?
-        delta_gdf.drop(columns=['Delta_LineString', 'Improved_Position'], inplace=True)
+            self.delta_gdf = delta_gdf
+
+            # TODO: supersede geom, store geoms as txt?
+            new_gdf.geometry = new_gdf.Improved_Position
+            new_gdf.drop(columns=['Improved_Position'], inplace=True)
+            new_gdf.sort_index(inplace=True)
+        else:
+            new_gdf = gpd.GeoDataFrame(new_gdf, geometry=new_gdf.Improved_Position, crs=self.epsg_str)
+            new_gdf.drop(columns=['Improved_Position'], inplace=True)
+            new_gdf.sort_index(inplace=True)
 
         # TODO: Clean up this code, a lot of redundancy... (for testing)
-
         # fit the direction (degrees) and Z (height) values from USBL
         if self.smooth_usbl_df is not None:
             new_gdf2 = pd.merge_asof(new_gdf, self.smooth_usbl_df[['direction']], left_index=True, right_index=True)
@@ -443,23 +454,23 @@ class TowLine:
             new_gdf2 = pd.merge_asof(new_gdf, self.raw_usbl_df[['direction']], left_index=True, right_index=True)
             z_gdf = self._zLookup(new_gdf2, self.raw_usbl_df, z_field=self.alt_field, datetime_field=self.datetime_field)
 
-        self.delta_gdf = delta_gdf
         self.fit_gdf = z_gdf
+        print(type(self.fit_gdf))
 
     """GEOREF FCNS"""
     def apply_gsd(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
         in_gdf["GSD_W"] = in_gdf.apply(
-            lambda row: self._calc_gsd(row), axis=1)
+            lambda row: self._calc_gsd(row, z_field=self.alt_field), axis=1)
 
         in_gdf["GSD_H"] = in_gdf.apply(
-            lambda row: self._calc_gsd(row, height=True), axis=1)
+            lambda row: self._calc_gsd(row, z_field=self.alt_field, height=True), axis=1)
 
         in_gdf['GSD_MAX'] = in_gdf[['GSD_W', 'GSD_H']].max(axis=1)
 
         in_gdf['GSD_MIN'] = in_gdf[['GSD_W', 'GSD_H']].min(axis=1)
 
-    def _calc_gsd(self, row, height=False, z_field='CamAlt'):
+    def _calc_gsd(self, row, height=False, z_field='CamAltCor'):
         # calculate the ground spacing distance (GSD) for each image in meters
         H = row[z_field]
         F = row.Focal_Length_mm
@@ -628,17 +639,17 @@ class TowLine:
 
             # plot the original points...
             self.img_gdf.plot(ax=ax, color='red', label="Img. Exif Locations", legend=True)
-
-            # plot the deltas...
-            self.delta_gdf.plot(ax=ax, color='blue', label="Shifts", legend=True)
+            if self.delta_gdf is not None:
+                # plot the deltas...
+                self.delta_gdf.plot(ax=ax, color='blue', label="Shifts", legend=True)
 
             # only plot the best usbl trackline...
             if self.smooth_usbl_traj is not None:
                 self.smooth_usbl_traj.plot(ax=ax, column="speed", cmap="viridis", label='Smoothed Trackline', legend=True)
             else:
                 self.raw_usbl_traj.plot(ax=ax, color='red', label="Raw Trackline", legend=True)
-
-        plt.text(0, 0, f"Average shift: {self.delta_gdf['Delta_LineLength'].mean()} meters")
+        if self.delta_gdf is not None:
+            plt.text(0, 0, f"Average shift: {self.delta_gdf['Delta_LineLength'].mean()} meters")
         plt.title("EXIF Points to USBL Trajectory Fit")
 
         plt.xlabel("UTM Easting (m)")
@@ -663,17 +674,11 @@ class TowLine:
 
     def _scale_and_write_image(self, row):
         # use rasterio to write image with crs and transform
-        with rasterio.open(row.img_path, 'r+') as src:
-            data=src.read()
-            img_transform = self.transforms[row.img_name]
-            src.transform = img_transform * img_transform.scale(
-                (src.width / data.shape[-1]),
-                (src.height / data.shape[-2])
-            )
-            src.crs = self.epsg_str
-            src.nodata = 0
+        img_transform = self.transforms[row.img_name]
+        output_file = os.path.join(self.out_dir, row.img_name)
 
-            output_file = os.path.join(self.out_dir, row.img_name)
+        with rasterio.open(row.img_path, 'r') as src:
+            data=src.read()
             with rasterio.open(output_file, 'w', **src.profile) as dst:
                 out_data = src.read(
                     out_shape=(
@@ -682,6 +687,12 @@ class TowLine:
                         int(src.width * row.Upscale_Factor)
                     ),
                     resampling=Resampling.bilinear
+                )
+                dst.crs = self.epsg_str
+                dst.nodata = 0
+                dst.transform = img_transform * img_transform.scale(
+                    (src.width / data.shape[-1]),
+                    (src.height / data.shape[-2])
                 )
 
                 dst.write(out_data)

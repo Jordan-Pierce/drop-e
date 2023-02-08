@@ -47,6 +47,13 @@ if __name__ == "__main__":
         default=0.25,
         help="One of two parameters that controls the smoothing of tracklines. If set \
                 to 0.0, no smoothing will be applied. Default value is 0.25.")
+    parser.add_argument("--preview_mode", "-pm",
+                        action="store_true",
+                        help="If set, the script will run in 'preview mode', which \
+                            will process the data set, generate vectors outputs of \
+                            the towline trajectory and image footprints, but will \
+                            not save any output images. This is useful for quickly \
+                            previewing the results of a processing run.")
 
     # TODO: add verbose
 
@@ -58,7 +65,7 @@ if __name__ == "__main__":
     towline = TowLine(args.image_dir, args.out_dir, args.usbl_path,
                     args.datetime_field, args.pdop_field, args.elevation_field,
                     args.filter_quartile, args.process_noise_std,
-                    args.measurement_noise_std)
+                    args.measurement_noise_std, args.preview_mode)
 
     # Dump the GDFs...
     towline.dump_gdfs()
