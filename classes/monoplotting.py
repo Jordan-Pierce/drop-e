@@ -156,8 +156,6 @@ class TowLine:
             self.bbox_gdf = self.fit_gdf[['img_path', 'img_name', 'bbox']].copy()
             self.bbox_gdf.geometry = self.bbox_gdf.bbox
 
-            self._write_gdf(self.bbox_gdf, 'bbox')
-
             if not self.preview_mode:
                 self.georeference_images(self.fit_gdf)
 
@@ -236,7 +234,8 @@ class TowLine:
             exif_dict["img_path"] = img_path
             exif_dict["img_name"] = img
 
-            exif_dict['Focal_Length_mm'] = img_exif.get('Focal_Length')
+            exif_dict['Focal_Length'] = img_exif.get('Focal_Length')
+            exif_dict['Focal_Length_Unit'] = "millimeters"
 
             exif_dict['Focal_Plane_X_Resolution'] = img_exif.get('focal_plane_x_resolution')
             exif_dict['Focal_Plane_Y_Resolution'] = img_exif.get('focal_plane_y_resolution')
@@ -343,10 +342,11 @@ class TowLine:
         print(f"EPSG: {self.epsg_str}")
         traj = mpd.Trajectory(pt_gdf, 1, t="datetime_idx", crs=pt_gdf.crs)
 
-        traj.add_direction()
-        traj.add_speed()
-        traj.add_distance(name="mpd_distance")
-        # traj.add_timedelta()
+        traj.add_direction(overwrite=True, name="Direction")
+        traj.add_speed(overwrite=True, name="Speed")
+        # traj.add_acceleration(overwrite=True, name="Acceleration")
+        traj.add_distance(overwrite=True, name="Distance")
+        # traj.add_timedelta(overwrite=True, name="TimeDelta")
 
         self.raw_usbl_traj = traj
         self.raw_usbl_df = traj.to_point_gdf()
@@ -359,11 +359,11 @@ class TowLine:
                 process_noise_std=process_noise_std,
                 measurement_noise_std=measurement_noise_std)
 
-            s_traj.add_direction(overwrite=True)
-            s_traj.add_direction(overwrite=True)
-            s_traj.add_speed(overwrite=True)
-            s_traj.add_distance(overwrite=True, name="mpd_distance")
-            # traj.add_timedelta(overwrite=True, name="mpd_timedelta")
+            s_traj.add_direction(overwrite=True, name="Direction")
+            s_traj.add_speed(overwrite=True, name="Speed")
+            # s_traj.add_acceleration(overwrite=True, name="Acceleration")
+            s_traj.add_distance(overwrite=True, name="Distance")
+            # s_traj.add_timedelta(overwrite=True, name="TimeDelta")
 
             self.smooth_usbl_traj = s_traj
             self.smooth_usbl_df = s_traj.to_point_gdf()
@@ -448,10 +448,10 @@ class TowLine:
         # TODO: Clean up this code, a lot of redundancy... (for testing)
         # fit the direction (degrees) and Z (height) values from USBL
         if self.smooth_usbl_df is not None:
-            new_gdf2 = pd.merge_asof(new_gdf, self.smooth_usbl_df[['direction']], left_index=True, right_index=True)
+            new_gdf2 = pd.merge_asof(new_gdf, self.smooth_usbl_df[['Direction']], left_index=True, right_index=True)
             z_gdf = self._zLookup(new_gdf2, self.smooth_usbl_df, z_field=self.alt_field, datetime_field=self.datetime_field)
         else:
-            new_gdf2 = pd.merge_asof(new_gdf, self.raw_usbl_df[['direction']], left_index=True, right_index=True)
+            new_gdf2 = pd.merge_asof(new_gdf, self.raw_usbl_df[['Direction']], left_index=True, right_index=True)
             z_gdf = self._zLookup(new_gdf2, self.raw_usbl_df, z_field=self.alt_field, datetime_field=self.datetime_field)
 
         self.fit_gdf = z_gdf
@@ -466,6 +466,8 @@ class TowLine:
         in_gdf["GSD_H"] = in_gdf.apply(
             lambda row: self._calc_gsd(row, z_field=self.alt_field, height=True), axis=1)
 
+        in_gdf["GSD_Unit"] = "meters"
+
         in_gdf['GSD_MAX'] = in_gdf[['GSD_W', 'GSD_H']].max(axis=1)
 
         in_gdf['GSD_MIN'] = in_gdf[['GSD_W', 'GSD_H']].min(axis=1)
@@ -473,7 +475,7 @@ class TowLine:
     def _calc_gsd(self, row, height=False, z_field='CamAltCor'):
         # calculate the ground spacing distance (GSD) for each image in meters
         H = row[z_field]
-        F = row.Focal_Length_mm
+        F = row.Focal_Length
         img_w = row.Pixel_X_Dimension
         img_h = row.Pixel_Y_Dimension
 
@@ -515,10 +517,10 @@ class TowLine:
         cols, rows = row.Pixel_X_Dimension, row.Pixel_Y_Dimension
         origin = (center_x, center_y, 0)
 
-        rot_tl = self._rotate_point_3d(tl, math.radians(row.direction), 'z', origin=origin)  # NOTE: may want to cut the custom code here in favor of a shapely poly rotation...
-        rot_bl = self._rotate_point_3d(bl, math.radians(row.direction), 'z', origin=origin)
-        rot_tr = self._rotate_point_3d(tr, math.radians(row.direction), 'z', origin=origin)
-        rot_br = self._rotate_point_3d(br, math.radians(row.direction), 'z', origin=origin)
+        rot_tl = self._rotate_point_3d(tl, math.radians(row.Direction), 'z', origin=origin)  # NOTE: may want to cut the custom code here in favor of a shapely poly rotation...
+        rot_bl = self._rotate_point_3d(bl, math.radians(row.Direction), 'z', origin=origin)
+        rot_tr = self._rotate_point_3d(tr, math.radians(row.Direction), 'z', origin=origin)
+        rot_br = self._rotate_point_3d(br, math.radians(row.Direction), 'z', origin=origin)
 
         corners = [Point(rot_bl), Point(rot_br), Point(rot_tr), Point(rot_tl)]
 
@@ -587,13 +589,13 @@ class TowLine:
 
     def dump_gdfs(self):
         if self.fit_gdf is not None:
-            self._write_gdf(self.fit_gdf, "fit_gdf", format="GPKG", index=False)
+            self._write_gdf(self.fit_gdf, "image_centroids", format="GPKG", index=False)
 
         #if self.img_gdf is not None:
         #    self._write_gdf(self.img_gdf, "img_gdf", format="GPKG", index=False)
 
         if self.delta_gdf is not None:
-            self._write_gdf(self.delta_gdf, "delta_gdf", format="GPKG", index=False)
+            self._write_gdf(self.delta_gdf, "image_to_traj_fit", format="GPKG", index=False)
 
         #if self.raw_usbl_df is not None:
         #    self._write_gdf(self.raw_usbl_df, "raw_usbl_df", format="GPKG", index=False)
@@ -602,7 +604,10 @@ class TowLine:
         #    self._write_gdf(self.smooth_usbl_df, "smooth_usbl_df", format="GPKG", index=False)
 
         if self.smooth_usbl_traj_line is not None:
-            self._write_gdf(self.smooth_usbl_traj_line, "smooth_usbl_traj_line", format="GPKG", index=False)
+            self._write_gdf(self.smooth_usbl_traj_line, "calculated_trajectory", format="GPKG", index=False)
+
+        if self.bbox_gdf is not None:
+            self._write_gdf(self.bbox_gdf, "image_bboxes", format="GPKG", index=False)
 
     def plot_smoothing_operation(self, save_fig=False):
         f, ax = plt.subplots()
@@ -611,7 +616,7 @@ class TowLine:
         else:
             print("No raw USBL trajectory to plot. Skipping...")
         if self.smooth_usbl_traj is not None:
-            self.smooth_usbl_traj.plot(ax=ax, column="speed", cmap="viridis", label="Smoothed Trajectory", legend=True)
+            self.smooth_usbl_traj.plot(ax=ax, column="Speed", cmap="viridis", label="Smoothed Trajectory", legend=True)
 
         plt.title("Smoothed USBL Trajectory")
 
@@ -645,7 +650,7 @@ class TowLine:
 
             # only plot the best usbl trackline...
             if self.smooth_usbl_traj is not None:
-                self.smooth_usbl_traj.plot(ax=ax, column="speed", cmap="viridis", label='Smoothed Trackline', legend=True)
+                self.smooth_usbl_traj.plot(ax=ax, column="Speed", cmap="viridis", label='Smoothed Trackline', legend=True)
             else:
                 self.raw_usbl_traj.plot(ax=ax, color='red', label="Raw Trackline", legend=True)
         if self.delta_gdf is not None:

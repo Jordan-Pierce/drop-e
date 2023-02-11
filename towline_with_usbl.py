@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
     # Plot the smoothing operation...
     # TODO: make this optional... (verbose?)
-    towline.plot_smoothing_operation(save_fig=True)
+    #towline.plot_smoothing_operation(save_fig=True)
 
     # Plot the EXIF-USBL fit...
-    towline.plot_usbl_fit(save_fig=True)
+    #towline.plot_usbl_fit(save_fig=True)
