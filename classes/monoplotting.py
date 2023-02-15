@@ -32,7 +32,7 @@ warnings.filterwarnings("ignore", message="CRS not set for some of the concatena
 
 allowed_img_ext = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
 
-res_unit_lookup = {"1": "None", 2: "Inch", 3: "Centimeter"}
+res_unit_lookup = {1: "None", 2: "Inch", 3: "Centimeter", None: "None" }
 
 ureg = pint.UnitRegistry()
 
@@ -240,6 +240,7 @@ class TowLine:
 
             exif_dict['Focal_Plane_X_Resolution'] = img_exif.get('focal_plane_x_resolution')
             exif_dict['Focal_Plane_Y_Resolution'] = img_exif.get('focal_plane_y_resolution')
+            print(img_exif.get('focal_plane_resolution_unit'))
             exif_dict['Focal_Plane_Resolution_Unit'] = str.lower(
                 res_unit_lookup[img_exif.get('focal_plane_resolution_unit')]
             )
