@@ -155,6 +155,7 @@ class TowLine:
 
             self.bbox_gdf = self.fit_gdf[['img_path', 'img_name', 'bbox']].copy()
             self.bbox_gdf.geometry = self.bbox_gdf.bbox
+            self.bbox_gdf.crs = self.epsg_str
 
             if not self.preview_mode:
                 self.georeference_images(self.fit_gdf)
@@ -303,11 +304,16 @@ class TowLine:
         # filter outliers by keeping lower quartile of PDOP values
         if self.pdop_field is not None:
             max_pdop = usbl_gdf[pdop_field].quantile(filter_quartile)
-            count = len(usbl_gdf) - len(usbl_gdf[usbl_gdf[pdop_field] < max_pdop])
-            usbl_gdf = usbl_gdf[usbl_gdf[pdop_field] < max_pdop]
+            print(type(max_pdop), max_pdop)
 
-            print(f"--filter_quartile of {filter_quartile} allows a max PDOP of {max_pdop}.")
-            print(f"{count} USBL pings were filtered based on their {pdop_field} field.")
+            if not math.isnan(max_pdop):
+                count = len(usbl_gdf) - len(usbl_gdf[usbl_gdf[pdop_field] < max_pdop])
+                usbl_gdf = usbl_gdf[usbl_gdf[pdop_field] < max_pdop]
+
+                print(f"--filter_quartile of {filter_quartile} allows a max PDOP of {max_pdop}.")
+                print(f"{count} USBL pings were filtered based on their {pdop_field} field.")
+            else:
+                print(f"WARNING: No valid PDOP values found in column {pdop_field}. No filtering will be performed.")
         else:
             print ("WARNING: No PDOP field specified. No filtering will be performed.")
 
