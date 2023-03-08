@@ -142,36 +142,12 @@ class TowLine:
         # georeferencing OR orthorectification, and perform the operation.
 
         if self.fit_gdf is not None:
-            self.apply_gsd(self.fit_gdf)
-
-            self.max_gsd_mode = self.fit_gdf.GSD_MAX.mode().max()
-            print(f"Mode of Max GSD: {self.max_gsd_mode}")
-
-            self.apply_upscale_factor(self.fit_gdf)
-
-            self.apply_corner_gcps(self.fit_gdf)
-
-            self.apply_transform(self.fit_gdf)
-
-            self.bbox_gdf = self.fit_gdf[['img_path', 'img_name', 'bbox']].copy()
-            self.bbox_gdf.geometry = self.bbox_gdf.bbox
-            self.bbox_gdf.crs = self.epsg_str
-
+            self.orient_images(self.fit_gdf)
             if not self.preview_mode:
                 self.georeference_images(self.fit_gdf)
 
         else:
-            self.apply_gsd(self.img_gdf)
-
-            self.mode_gsd = self.img_gdf.GSD_MAX.mode().max()
-            print(f"Mode of Max GSD: {self.mode_gsd}")
-
-            self.apply_upscale_factor(self.img_gdf)
-
-            self.apply_corner_gcps(self.img_gdf)
-
-            self.apply_transform(self.img_gdf)
-
+            self.orient_images(self.img_gdf)
             if not self.preview_mode:
                 self.georeference_images(self.img_gdf)
 
@@ -497,12 +473,12 @@ class TowLine:
             gsd_w = (H * sensor_w) / (F * img_w)
             return gsd_w
 
-    def apply_upscale_factor(self, in_gdf):
+    def _apply_upscale_factor(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
         in_gdf["Upscale_Factor"] = in_gdf.apply(
             lambda row: self.max_gsd_mode / row.GSD_MAX, axis=1)
 
-    def apply_corner_gcps(self, in_gdf):
+    def _apply_corner_gcps(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
 
         in_gdf['bbox'] = in_gdf.apply(lambda row: self._rotate_corner_gcps(row), axis=1)
@@ -551,7 +527,7 @@ class TowLine:
         else:
             raise ValueError("Invalid axis")
 
-    def apply_transform(self, in_gdf):
+    def _apply_transform(self, in_gdf):
         # Create an affine transform for each image
         in_gdf.apply(lambda row: self._calc_transform(row), axis=1)
 
@@ -572,6 +548,23 @@ class TowLine:
         # print(transform, type(transform))
 
         self.transforms[row.img_name] = transform
+
+    def orient_images(self, in_gdf):
+        self.apply_gsd(in_gdf)
+
+        self.gsd_mode_max = in_gdf.GSD_MAX.mode().max()
+        print(f"Mode of Max GSD: {self.gsd_mode_max}")
+
+        self._apply_upscale_factor(in_gdf)
+
+        self._apply_corner_gcps(in_gdf)
+
+        self._apply_transform(in_gdf)
+
+        self.bbox_gdf = in_gdf[['img_path', 'img_name', 'bbox']].copy()
+        self.bbox_gdf.geometry = self.bbox_gdf.bbox
+        self.bbox_gdf.crs = self.epsg_str
+
 
     def georeference_images(self, in_gdf):
         # Extract the ground spacing distance from each row of the fit_gdf
