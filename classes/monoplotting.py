@@ -106,15 +106,12 @@ class TowLine:
 
         # Step 3: Round out the internal / external orientation parameters needed for
         # georeferencing OR orthorectification, and perform the operation.
+
+        # TODO: clean this up, theres a lot of redundancy here
         if self.fit_gdf is not None:
             self.orient_images(self.fit_gdf)
-            if not self.preview_mode:
-                self.georeference_images(self.fit_gdf)
-
         else:
             self.orient_images(self.img_gdf)
-            if not self.preview_mode:
-                self.georeference_images(self.img_gdf)
 
     """DATA INGEST FCNS"""
     def build_img_gdf(self):
@@ -647,14 +644,18 @@ class TowLine:
                 dst.write(out_data)
         print(f"Finished writing {row.img_name} to {output_file}")
 
-
-    def georeference_images(self, in_gdf):
+    def write_georeferenced_images(self):
         """ Given a GeoDataFrame of images (rows), run a pandas apply function to open
         the original image, resample to a new GSD, and write to the output directory.
         """
+        # TODO: clean this up, theres a lot of redundancy here
+        if self.fit_gdf is not None:
+            in_gdf = self.fit_gdf
+        else:
+            in_gdf = self.img_gdf
+
         # Extract the ground spacing distance from each row of the fit_gdf
         in_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
-
 
     """PLOTTING + WRITING FCNS"""
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
