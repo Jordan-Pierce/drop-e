@@ -12,3 +12,4 @@ Shapely
 folium
 utm
 rasterio
+stonesoup
