@@ -47,32 +47,41 @@ if __name__ == "__main__":
         default=0.25,
         help="One of two parameters that controls the smoothing of tracklines. If set \
                 to 0.0, no smoothing will be applied. Default value is 0.25.")
-    parser.add_argument("--preview_mode", "-pm",
-                        action="store_true",
-                        help="If set, the script will run in 'preview mode', which \
-                            will process the data set, generate vectors outputs of \
-                            the towline trajectory and image footprints, but will \
-                            not save any output images. This is useful for quickly \
-                            previewing the results of a processing run.")
 
     # TODO: add verbose
 
 
     args = parser.parse_args()
 
-    # Create a TowLine object, which kicks off a processing chain...
+    # Create a TowLine object, which kicks off a pre-defined processing chain based on
+    # the input arguments. This processing chain computes vector files (GDFs) and meta-
+    # data (stored in GDF attribute tables) that pertain to georeferencing of imagery.
 
     towline = TowLine(args.image_dir, args.out_dir, args.usbl_path,
                     args.datetime_field, args.pdop_field, args.elevation_field,
                     args.filter_quartile, args.process_noise_std,
-                    args.measurement_noise_std, args.preview_mode)
+                    args.measurement_noise_std)
+
+    # Currently a TowLine object has the following exposed methods:
+    #  - write_georeferenced_images() - to write georeferenced images to disk
+    #  - dump_gdfs() - to dump all vector GDFs to disk
+    #  - plot_smoothing_operation() - generates a plot of the trackline smoothing operation
+    #    which is useful for debugging and testing
+    #  - plot_usbl_fit() - generates a plot showing where USBL points are falling on the
+    #    trackline, which is useful for debugging and testing
+    #  - plot_rotate() - generates a plot showing the rotation of points about an axis.
+    #    This is useful for debugging and testing
+
+    # TO ADD:
+    #  - plot_georeferencing() - generates a plot showing the footprints of georeferenced
+    #    images on a map. This is useful for debugging and testing
+    #  - write_orthorectied_images() - to write orthorectified images to disk (once a
+    #    DEM / depth mask is available)
+    #  - dump_XXXX() - expose the commands to save individual GDFs to disk, rather than
+    #    just dumping all of them at once
+
+    # Write the georeferenced images...
+    towline.write_georeferenced_images()
 
     # Dump the GDFs...
     towline.dump_gdfs()
-
-    # Plot the smoothing operation...
-    # TODO: make this optional... (verbose?)
-    #towline.plot_smoothing_operation(save_fig=True)
-
-    # Plot the EXIF-USBL fit...
-    #towline.plot_usbl_fit(save_fig=True)
