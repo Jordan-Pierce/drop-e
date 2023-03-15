@@ -1,0 +1,14 @@
+Pint
+python-dateutil
+Pillow
+exif
+matplotlib
+scikit-learn
+numpy
+pandas
+geopandas
+movingpandas
+Shapely
+folium
+utm
+rasterio
