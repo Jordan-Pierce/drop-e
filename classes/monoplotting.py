@@ -37,48 +37,14 @@ res_unit_lookup = {1: "None", 2: "Inch", 3: "Centimeter", None: "None" }
 ureg = pint.UnitRegistry()
 
 
-def utm_epsg_from_latlot(lat, lon):
-    # source: https://github.com/Turbo87/utm/issues/51
-    zone = utm.from_latlon(lat, lon)[2]
-    return f"326{zone:02d}" if lat >= 0 else f"327{zone:02d}"
-
-
-def dms_to_dd(dms, direction, verbose=False) -> float:
-    """
-    Converts a lat or long in Degree/Minutes/Seconds format to Decimal Degrees.
-
-    Parameters:
-        - dms (list): A list of 3 floats, representing the Degree, Minutes, and Seconds.
-        - direction (str): Either 'N' or 'S' for latitude, or 'E' or 'W' for longitude.
-        - verbose (bool): If True, prints the inputs and resulting outputs to the
-            console. If false (default), this function does not print anything.
-
-    Returns:
-        - dd (float): The lat or long in Decimal Degrees.
-    """
-
-    degrees, minutes, seconds = dms
-
-    dd = float(degrees) + float(minutes)/60 + float(seconds)/(3600)
-
-    if direction == 'S' or direction == 'W':
-        dd *= -1
-
-    if verbose:
-        print(
-            f"DMS_TO_DD VERBOSE | Input: {degrees}° {minutes}' {seconds}'' {direction} "
-            f"| Output: {dd} of type: {type(dd)}"
-        )
-
-    return dd
-
-
 class TowLine:
     def __init__(
         self, img_dir, out_dir, usbl_path="None", datetime_field="DateTime",
         pdop_field=None, alt_field="CaAltDepth", filter_quartile=0.95,
         process_noise_std=1.0, measurement_noise_std=0.25, preview_mode=False
     ):
+        """ Initialize the TowLine class, and either preview or receive images."""
+
         self.img_dir = img_dir
         self.out_dir = out_dir
         self.usbl_path = usbl_path
@@ -140,7 +106,6 @@ class TowLine:
 
         # Step 3: Round out the internal / external orientation parameters needed for
         # georeferencing OR orthorectification, and perform the operation.
-
         if self.fit_gdf is not None:
             self.orient_images(self.fit_gdf)
             if not self.preview_mode:
@@ -153,10 +118,10 @@ class TowLine:
 
     """DATA INGEST FCNS"""
     def build_img_gdf(self):
-        # TODO: how to reliably filter the "whiteboard images" w/o USBL timestamps?
-        # IDEA: timedelta from movingpandas trajectory, reverse sort, and drop under
-        # a certain threshold (or percentile). This assumes whiteboards are always first
-        # in the sequence, which is a safe assumption for now, but maybe add reverse too?
+        """ Given a directory of images, extract the relevant EXIF data and build a
+        GeoPandasDataFrame (gdf) from this information. """
+
+
 
         imgs = [i for i in os.listdir(self.img_dir) if i.endswith(allowed_img_ext)]
         print(f"Found {len(imgs)} images in {self.img_dir}...")
@@ -181,6 +146,11 @@ class TowLine:
             )
             img_gdf.index = img_gdf['DateTime']
 
+            # TODO: how to reliably filter the "whiteboard images" w/o USBL timestamps?
+            #   IDEA: timedelta from movingpandas trajectory, reverse sort, and drop under
+            #   a certain threshold (or percentile). This assumes whiteboards are always first
+            #   in the sequence, which is a safe assumption for now, but maybe add reverse too?
+
             self.img_gdf = img_gdf
 
         else:
@@ -192,7 +162,8 @@ class TowLine:
             self.img_gdf = img_df
 
     def _extract_img_exif(self, img):
-        #print(f"Reading GeoExif for {img}")
+        """ Given an image path, extract the relevant EXIF data and return as a
+        dictionary."""
 
         img_path = os.path.join(self.img_dir, img)
         exif_dict = {}
@@ -245,11 +216,11 @@ class TowLine:
 
             # Convert Lat/Long to Decimal Degrees, infer UTM Coordinates and Zone
             if exif_dict['GPS_Latitude_DMS'] is not None and exif_dict['GPS_Longitude_DMS'] is not None:
-                exif_dict['GPS_Latitude_DD'] = dms_to_dd(
+                exif_dict['GPS_Latitude_DD'] = self._dms_to_dd(
                     exif_dict['GPS_Latitude_DMS'], exif_dict['GPS_Latitude_Ref']
                 )
 
-                exif_dict['GPS_Longitude_DD'] = dms_to_dd(
+                exif_dict['GPS_Longitude_DD'] = self._dms_to_dd(
                     exif_dict['GPS_Longitude_DMS'], exif_dict['GPS_Longitude_Ref']
                 )
 
@@ -260,7 +231,7 @@ class TowLine:
                 exif_dict['UTM_Easting'] = east1
                 exif_dict['UTM_Northing'] = north1
                 exif_dict['Estimated_UTM_Zone'] = str(zone) + zoneLetter
-                exif_dict['Estimated_UTM_EPSG'] = utm_epsg_from_latlot(
+                exif_dict['Estimated_UTM_EPSG'] = self._utm_epsg_from_latlot(
                 exif_dict['GPS_Latitude_DD'], exif_dict['GPS_Longitude_DD']
                 )
             else:
@@ -272,9 +243,49 @@ class TowLine:
 
         return exif_dict
 
+    def _utm_epsg_from_latlot(lat, lon):
+        """ Given a lat/long, return the UTM EPSG code.
+        source: https://github.com/Turbo87/utm/issues/51"""
+
+        zone = utm.from_latlon(lat, lon)[2]
+        return f"326{zone:02d}" if lat >= 0 else f"327{zone:02d}"
+
+    def _dms_to_dd(dms, direction, verbose=False) -> float:
+        """
+        Converts a lat or long in Degree/Minutes/Seconds format to Decimal Degrees.
+
+        Parameters:
+            - dms (list): A list of 3 floats, representing the Degree, Minutes, and Seconds.
+            - direction (str): Either 'N' or 'S' for latitude, or 'E' or 'W' for longitude.
+            - verbose (bool): If True, prints the inputs and resulting outputs to the
+                console. If false (default), this function does not print anything.
+
+        Returns:
+            - dd (float): The lat or long in Decimal Degrees.
+        """
+
+        degrees, minutes, seconds = dms
+
+        dd = float(degrees) + float(minutes)/60 + float(seconds)/(3600)
+
+        if direction == 'S' or direction == 'W':
+            dd *= -1
+
+        if verbose:
+            print(
+                f"DMS_TO_DD VERBOSE | Input: {degrees}° {minutes}' {seconds}'' {direction} "
+                f"| Output: {dd} of type: {type(dd)}"
+            )
+
+        return dd
+
     def build_usbl_gdf(
         self, pdop_field=None, filter_quartile=0.95
     ):
+        """ Given a path to a geospatial vector point file
+        (e.g. shapefile, geopackage, etc), read the file into a GeoPandas GeoDataFrame
+        and optionally filter outliers based on a precision (PDOP) field.
+        """
         # read USBL data into GeoPandas
         usbl_gdf = gpd.read_file(self.usbl_path)
 
@@ -294,20 +305,13 @@ class TowLine:
         else:
             print ("WARNING: No PDOP field specified. No filtering will be performed.")
 
-        # TODO: Consider how to handle dates... this parser has already failed once,
-        # and has some heavy overhead. It may be better to just prompt user for a
-        # date format string and use strptime instead...
-
-        # parse datetime, set as index
-        #usbl_gdf["datetime_field"] = usbl_gdf[self.datetime_field].apply(
-        #    lambda x: dateutil.parser.parse(x)
-        #)
+        # standardize the datetime field, and set that as the index
         usbl_gdf["datetime_idx"] = usbl_gdf[self.datetime_field].apply(
             lambda x: datetime.strptime(re.sub('[/.:]', '-', x), '%Y-%m-%d %H-%M-%S')
         )
         usbl_gdf.index = usbl_gdf['datetime_idx']
 
-        # these fill be used to filter out the images that don't have USBL data during
+        # these will be used to filter out the images that don't have USBL data during
         # the fit procedure...
         self.datetime_min = usbl_gdf["datetime_idx"].min()
         self.datetime_max = usbl_gdf["datetime_idx"].max()
@@ -321,6 +325,9 @@ class TowLine:
 
     """TRAJECTORY FCNS"""
     def calc_trajectory(self, pt_gdf, process_noise_std=1.0, measurement_noise_std=0.25):
+        """ Given a GeoPandas GeoDataFrame of points, calculate the trajectory with
+        MovingPandas. Optionally smooth the trajectory with a Kalman filter.
+        """
         # calculate trajectory information with MovingPandas
         print(f"EPSG: {self.epsg_str}")
         traj = mpd.Trajectory(pt_gdf, 1, t="datetime_idx", crs=pt_gdf.crs)
@@ -359,6 +366,9 @@ class TowLine:
                 therefore no smoothing will be applied to trackline.")
 
     def _zLookup(self, img_gdf, usbl_gdf, datetime_field='DateTime', z_field='CameraZ'):
+        """ Given a a USBL dataframe with precise Z data, correlate and interpolate
+        Z values for all images in the image GeoDataFrame.
+        """
         # get a list of datetimes every second between start and end:
         start = usbl_gdf[datetime_field].min()
         stop = usbl_gdf[datetime_field].max()
@@ -377,26 +387,27 @@ class TowLine:
         return img_gdf
 
     def fit_to_usbl(self):
+        """ Given a point GeoDataFrame of images, fit the images to the USBL trajectory
+        line (a MovingPandas Trajectory object) using the DateTime field as the key.
+
+        TODO: this function is doing alot... maybe split it up?
+        - This function also filters images by DateTime (if an image is outside trackline).
+        - This function also computes the "delta' between each image and USBL position, and
+        stores this info as a GeoDataFrame of linestrings.
+        """
         # create a copy of the original gdf to work with...
+        # TODO: could we improve memory usage by avoiding a copy. this was for testing.?
         new_gdf = self.img_gdf.copy()
-        print(new_gdf.head())
 
         # filter new_gdf based on DateTime field and self.datetime_min/max
         new_gdf = new_gdf[
             (new_gdf.DateTime >= self.datetime_min) & (new_gdf.DateTime <= self.datetime_max)
         ]
-        # new_gdf = new_gdf.loc[self.datetime_min:self.datetime_max]
-        count = len(self.img_gdf) - len(new_gdf)
-        print(f"{count} images were filtered based on their DateTime field.")
 
-        print(new_gdf.head())
+        print(f"{len(self.img_gdf) - len(new_gdf)} images were filtered based on their DateTime field.")
 
         # Fit Images to USBL using DateTime
         new_gdf['Improved_Position'] = new_gdf.apply(lambda row: self.smooth_usbl_traj.get_position_at(row.DateTime, method='interpolated'), axis=1)
-
-        print(new_gdf['Improved_Position'])
-
-
 
         # store the vector lines represenintg the  "delta" between each EXIF point and
         # the USBL location at that datetime. These are strictly used for plotting.
@@ -442,6 +453,10 @@ class TowLine:
 
     """GEOREF FCNS"""
     def apply_gsd(self, in_gdf):
+        """ Given a GeoDataFrame of images, run a pandas apply function to estimate
+        the ground spacing distance (GSD) for each image's X and Y dimensions, and
+        sets new columns specifying which is the min and max GSD.
+        """
         # Extract the ground spacing distance from each row of the fit_gdf
         in_gdf["GSD_W"] = in_gdf.apply(
             lambda row: self._calc_gsd(row, z_field=self.alt_field), axis=1)
@@ -449,13 +464,18 @@ class TowLine:
         in_gdf["GSD_H"] = in_gdf.apply(
             lambda row: self._calc_gsd(row, z_field=self.alt_field, height=True), axis=1)
 
+        # metadata column allows users to ascertain the units of GSD
         in_gdf["GSD_Unit"] = "meters"
 
+        # set the min and max GSD columns
         in_gdf['GSD_MAX'] = in_gdf[['GSD_W', 'GSD_H']].max(axis=1)
 
         in_gdf['GSD_MIN'] = in_gdf[['GSD_W', 'GSD_H']].min(axis=1)
 
     def _calc_gsd(self, row, height=False, z_field='CamAltCor'):
+        """ This function contains the mathematics for estimating the ground spacing
+        distance (GSD) of an image (for either height or width).
+        """
         # calculate the ground spacing distance (GSD) for each image in meters
         H = row[z_field]
         F = row.Focal_Length
@@ -474,16 +494,28 @@ class TowLine:
             return gsd_w
 
     def _apply_upscale_factor(self, in_gdf):
+        """ Given a GeoDataFrame of images, run a pandas apply function to estimate
+        the amount of upscaling (or downscaling) that needs to be applied to each
+        image to match the max GSD of the GeoDataFrame. The upscale factor is
+        only estimated here, the actual upscaling operation happens when the image
+        data is actually read and warped by rasterio.
+        """
         # Extract the ground spacing distance from each row of the fit_gdf
         in_gdf["Upscale_Factor"] = in_gdf.apply(
             lambda row: self.max_gsd_mode / row.GSD_MAX, axis=1)
 
     def _apply_corner_gcps(self, in_gdf):
+        """ Given a GeoDataFrame of images, run a pandas apply function that rotates
+        the corner gcps of each image to match the direction (bearing) of the image."""
         # Extract the ground spacing distance from each row of the fit_gdf
-
         in_gdf['bbox'] = in_gdf.apply(lambda row: self._rotate_corner_gcps(row), axis=1)
 
     def _rotate_corner_gcps(self, row):
+        """ This function contains the mathematics for rotating the corner gcps of
+        an image to match the direction (bearing) of the image.
+
+        This function is called by the _apply_corner_gcps function.
+        """
         # calculate the size of each image in meters
         center_x = row.geometry.x
         center_y = row.geometry.y
@@ -513,6 +545,13 @@ class TowLine:
         return rot_bbox
 
     def _rotate_point_3d(self, point, angle, axis, origin=(0, 0, 0)):
+        """ Contains the mathematics for rotating a point around an arbitrary axis and
+        origin. All angles in radians.
+
+        NOTE: the current workflow only requires rotating about the Z axis (to adjust image
+        orientation to match direction/bearing of travel). However, the ability to rotate about
+        X/Y would be useful for future development (i.e. roll/pitch adjustments).
+        """
         # RADIANS ONLY!
         x, y, z = point
         xo, yo, zo = origin
@@ -528,10 +567,18 @@ class TowLine:
             raise ValueError("Invalid axis")
 
     def _apply_transform(self, in_gdf):
+        """ Given a GeoDataFrame of images, run a pandas apply function to calculate
+        the corner GCPs for each image, and generate/return an affine tranformation
+        matrix for each image. This affine transform is used to reference or warp the
+        image data to a common coordinate system.
+        """
         # Create an affine transform for each image
         in_gdf.apply(lambda row: self._calc_transform(row), axis=1)
 
     def _calc_transform(self, row):
+        """ This function contains the operations required to extract image GCPs and
+        generate an affine transformation matrix (rasterio does the heavy lifting here).
+        """
         # print(len(row.bbox.exterior.coords[0:4]))
         tl, tr, br, bl = row.bbox.exterior.coords[0:4]
         cols, rows = row.Pixel_X_Dimension, row.Pixel_Y_Dimension
@@ -550,6 +597,10 @@ class TowLine:
         self.transforms[row.img_name] = transform
 
     def orient_images(self, in_gdf):
+        """ Given a GeoDataFrame of images, run a series of pandas apply functions to
+        calculate image GSD, corner GCPs, rotated corner GCPs, and produce a dataframe
+        with the appropriate geometry and CRS information.
+        """
         self.apply_gsd(in_gdf)
 
         self.gsd_mode_max = in_gdf.GSD_MAX.mode().max()
@@ -565,8 +616,42 @@ class TowLine:
         self.bbox_gdf.geometry = self.bbox_gdf.bbox
         self.bbox_gdf.crs = self.epsg_str
 
+    def _scale_and_write_image(self, row):
+        """ Contains the operations to take an input image and affine transform, open
+        the source image, retrieve the pixel data, resample this data using the upscale
+        factor, and write this resampled image data to disk with the new geometry and CRS
+        information. The output images are effectively georeferenced.
+        """
+        # use rasterio to write image with crs and transform
+        img_transform = self.transforms[row.img_name]
+        output_file = os.path.join(self.out_dir, row.img_name)
+
+        with rasterio.open(row.img_path, 'r') as src:
+            data=src.read()
+            with rasterio.open(output_file, 'w', **src.profile) as dst:
+                out_data = src.read(
+                    out_shape=(
+                        src.count,
+                        int(src.height * row.Upscale_Factor),
+                        int(src.width * row.Upscale_Factor)
+                    ),
+                    resampling=Resampling.bilinear
+                )
+                dst.crs = self.epsg_str
+                dst.nodata = 0
+                dst.transform = img_transform * img_transform.scale(
+                    (src.width / data.shape[-1]),
+                    (src.height / data.shape[-2])
+                )
+
+                dst.write(out_data)
+        print(f"Finished writing {row.img_name} to {output_file}")
+
 
     def georeference_images(self, in_gdf):
+        """ Given a GeoDataFrame of images (rows), run a pandas apply function to open
+        the original image, resample to a new GSD, and write to the output directory.
+        """
         # Extract the ground spacing distance from each row of the fit_gdf
         in_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
 
@@ -676,29 +761,3 @@ class TowLine:
         plt.plot(pts2, 'o', color='blue', label="Rot")
 
         plt.show()
-
-    def _scale_and_write_image(self, row):
-        # use rasterio to write image with crs and transform
-        img_transform = self.transforms[row.img_name]
-        output_file = os.path.join(self.out_dir, row.img_name)
-
-        with rasterio.open(row.img_path, 'r') as src:
-            data=src.read()
-            with rasterio.open(output_file, 'w', **src.profile) as dst:
-                out_data = src.read(
-                    out_shape=(
-                        src.count,
-                        int(src.height * row.Upscale_Factor),
-                        int(src.width * row.Upscale_Factor)
-                    ),
-                    resampling=Resampling.bilinear
-                )
-                dst.crs = self.epsg_str
-                dst.nodata = 0
-                dst.transform = img_transform * img_transform.scale(
-                    (src.width / data.shape[-1]),
-                    (src.height / data.shape[-2])
-                )
-
-                dst.write(out_data)
-        print(f"Finished writing {row.img_name} to {output_file}")
