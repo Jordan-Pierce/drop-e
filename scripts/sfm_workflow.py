@@ -1,5 +1,6 @@
-import os, sys, time
 import Metashape
+import os, sys, time
+from tqdm import tqdm
 
 from create_tif import *
 from create_reference import *
@@ -57,6 +58,20 @@ def run_sfm_workflow(input_folder):
     # Print the number of images that were successfully loaded into the chunk.
     print(str(len(chunk.cameras)) + " images loaded")
 
+    # Estimate image quality, remove those that are blurry
+    if chunk.cameras:
+        print("Checking image quality")
+        quality_threshold = 0.2
+        for camera in tqdm(chunk.cameras):
+            camera_quality = Metashape.Utils.estimateImageQuality(camera.image())
+            if float(camera_quality) < quality_threshold:
+                print("Removing Low Quality Camera: ", camera.label)
+                camera.enabled = False
+
+        print("Remaining # Cameras: ", len([c for c in chunk.cameras if c.enabled]))
+        doc.save()
+
+    # Import the cameras' reference from .csv file
     if chunk.cameras:
         chunk.importReference(reference_path,
                               format=Metashape.ReferenceFormatCSV,
@@ -76,9 +91,13 @@ def run_sfm_workflow(input_folder):
         chunk.alignCameras()
         doc.save()
 
+        # Optimize camera alignment
+        chunk.optimizeCameras()
+        doc.save()
+
     # Build depth maps (2.5D representations of the scene) from the aligned photos.
     if chunk.tie_points and not chunk.depth_maps:
-        chunk.buildDepthMaps(downscale=1, filter_mode=Metashape.MildFiltering)
+        chunk.buildDepthMaps(downscale=2, filter_mode=Metashape.MildFiltering)
         doc.save()
 
     # Build a 3D model from the depth maps.
@@ -102,10 +121,11 @@ def run_sfm_workflow(input_folder):
 
 if __name__ == '__main__':
 
-    # Check if the number of command-line arguments is less than 3.
-    # If true, print usage instructions and exit the program with a status code of 1.
-    if len(sys.argv) != 2:
-        print("Usage: sfm_workflow.py <image_folder>")
-        sys.exit(1)
-
-    run_sfm_workflow(sys.argv[1])
+    # Run the workflow on all folders located within ROOT
+    ROOT = "C://Users/jordan.pierce/Documents/Data/Drop_e/Geo/"
+    image_folders = os.listdir(ROOT)
+    for image_folder in image_folders:
+        try:
+            run_sfm_workflow(ROOT + image_folder + "/")
+        except Exception as e:
+            print(e, "\nIssue with: ", image_folder)

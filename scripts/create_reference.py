@@ -26,7 +26,7 @@ def create_reference_csv(input_folder):
     # Split point geometry into separate columns for easting and northing
     gdf_['Easting'] = gdf['geometry'].apply(lambda p: p.x)
     gdf_['Northing'] = gdf['geometry'].apply(lambda p: p.y)
-    gdf_['Altitude'] = 0
+    gdf_['Altitude'] = gdf['CaAltCor_m']
 
     # Output file
     out_file = file.replace(".gpkg", ".csv")
@@ -42,3 +42,12 @@ def create_reference_csv(input_folder):
 
     return out_file
 
+
+if __name__ == "__main__":
+
+    # Pass in the path to the directory
+    input_folder = sys.argv[1]
+
+    assert os.path.exists(input_folder), print("Path does not exists: ", input_folder)
+
+    reference_path = create_reference_csv(input_folder)

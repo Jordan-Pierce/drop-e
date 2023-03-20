@@ -100,4 +100,4 @@ if __name__ == "__main__":
     towline.dump_gdfs()
 
     # Run the SfMm Workflow
-    run_sfm_workflow(args.image_dir)
+    run_sfm_workflow(args.out_dir)
