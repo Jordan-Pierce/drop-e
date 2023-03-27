@@ -40,7 +40,7 @@ def create_reference_csv(input_folder):
         print("ERROR: Could not create Reference: ", out_file)
         out_file = None
 
-    return out_file
+    return gdf_, out_file
 
 
 if __name__ == "__main__":
@@ -50,4 +50,4 @@ if __name__ == "__main__":
 
     assert os.path.exists(input_folder), print("Path does not exists: ", input_folder)
 
-    reference_path = create_reference_csv(input_folder)
+    gdf, reference_path = create_reference_csv(input_folder)
