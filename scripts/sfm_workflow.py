@@ -4,6 +4,7 @@ from tqdm import tqdm
 
 from create_tif import *
 from create_reference import *
+from georeference_orthomosaic import *
 
 # Star the timer
 t0 = time.time()
@@ -26,7 +27,7 @@ def find_files(folder, types):
             (entry.is_file() and os.path.splitext(entry.name)[1].lower() in types)]
 
 
-def run_sfm_workflow(input_folder, output_folder, georeference=False):
+def run_sfm_workflow(input_folder, output_folder):
     """Takes in an input folder, runs SfM Workflow on all images in it,
     outputs the results in the same folder."""
 
@@ -37,6 +38,7 @@ def run_sfm_workflow(input_folder, output_folder, georeference=False):
 
     # Create the output folder if it doesn't already exist
     os.makedirs(output_folder, exist_ok=True)
+    output_orthomosaic = output_folder + "/Orthomosaic.tif"
 
     # Create the reference csv, get the path.
     gdf, reference_path = create_reference_csv(input_folder)
@@ -119,7 +121,9 @@ def run_sfm_workflow(input_folder, output_folder, georeference=False):
 
     # Export the orthomosaic as a GeoTIFF file if it exists in the chunk.
     if chunk.orthomosaic:
-        chunk.exportRaster(output_folder + '/Orthomosaic.tif', source_data=Metashape.OrthomosaicData)
+
+        if not os.path.exists(output_orthomosaic):
+            chunk.exportRaster(output_orthomosaic, source_data=Metashape.OrthomosaicData)
 
         # Identifying a cameras's origin (0, 0)
         x_pixels = []
@@ -128,10 +132,14 @@ def run_sfm_workflow(input_folder, output_folder, georeference=False):
 
         for camera in chunk.cameras:
             try:
-                p = chunk.model.pickPoint(camera.center, camera.unproject(Metashape.Vector((0, 0, 1))))
+                width, height = camera.sensor.width//2, camera.sensor.height//2
+                p = chunk.model.pickPoint(camera.center, camera.unproject(Metashape.Vector((width, height, 1))))
                 P = chunk.orthomosaic.crs.project(chunk.transform.matrix.mulp(p))
                 x = int((P.x - chunk.orthomosaic.left) / chunk.orthomosaic.resolution)
                 y = int((chunk.orthomosaic.top - P.y) / chunk.orthomosaic.resolution)
+
+                # Add a marker to the chunk
+                chunk.addMarker(point=p)
 
             except:
                 print("ERROR: Could not project camera ", camera.label)
@@ -145,7 +153,15 @@ def run_sfm_workflow(input_folder, output_folder, georeference=False):
         gdf['image_label'] = image_names
         gdf['x_pixels'] = x_pixels
         gdf['y_pixels'] = y_pixels
-        gdf.to_csv(output_folder + "/image_centroids.csv")
+        new_reference_path = output_folder + "/new_image_centroids.csv"
+        gdf.to_csv(new_reference_path)
+
+        doc.save()
+
+        if os.path.exists(output_orthomosaic) and os.path.exists(new_reference_path):
+            # Georeference the orthomosaic
+            output_geo_orthomosaic = output_folder + "/GeoOrthomosaic.tif"
+            georeference_ortho(output_orthomosaic, output_geo_orthomosaic, reference_path)
 
     # Print a message indicating that the processing has finished and the results have been saved.
     print('Processing finished, results saved to ' + output_folder + '.')
