@@ -1,10 +1,11 @@
 import Metashape
 import os, sys, time
+
+import numpy as np
 from tqdm import tqdm
 
 from create_tif import *
-from create_reference import *
-from georeference_orthomosaic import *
+from georeference import *
 
 # Star the timer
 t0 = time.time()
@@ -12,17 +13,16 @@ t0 = time.time()
 # Get the Metashape License stored in the environmental variable
 Metashape.License().activate(os.getenv("METASHAPE_LICENSE"))
 
-# Checking compatibility
+# Check that the Metashape version is compatible with this script
 compatible_major_version = "2.0"
 found_major_version = ".".join(Metashape.app.version.split('.')[:2])
 if found_major_version != compatible_major_version:
     raise Exception("Incompatible Metashape version: {} != {}".format(found_major_version, compatible_major_version))
 
 
-# Define a function named "find_files" that takes in two arguments:
-# a folder (directory) and a list of file types (extensions).
-# The function returns a list of file paths that end with any of the specified extensions.
 def find_files(folder, types):
+    """Takes in a folder and a list of file types, returns a list of file paths
+    that end with any of the specified extensions."""
     return [entry.path for entry in os.scandir(folder) if
             (entry.is_file() and os.path.splitext(entry.name)[1].lower() in types)]
 
@@ -76,12 +76,12 @@ def run_sfm_workflow(input_folder, output_folder):
     # Estimate image quality, remove those that are blurry
     if chunk.cameras:
         print("Checking image quality")
-        quality_threshold = 0.2
-        for camera in tqdm(chunk.cameras):
-            camera_quality = Metashape.Utils.estimateImageQuality(camera.image())
-            if float(camera_quality) < quality_threshold:
-                print("Removing Low Quality Camera: ", camera.label)
-                camera.enabled = False
+        # quality_threshold = 0.2
+        # for camera in tqdm(chunk.cameras):
+        #     camera_quality = Metashape.Utils.estimateImageQuality(camera.image())
+        #     if float(camera_quality) < quality_threshold:
+        #         print("Removing Low Quality Camera: ", camera.label)
+        #         camera.enabled = False
 
         print("Remaining # Cameras: ", len([c for c in chunk.cameras if c.enabled]))
         doc.save()
@@ -93,6 +93,7 @@ def run_sfm_workflow(input_folder, output_folder):
                           generic_preselection=True,
                           reference_preselection=True,
                           downscale=1)
+        # Save the document
         doc.save()
 
         # Align the cameras to estimate their relative positions in space.
@@ -114,25 +115,50 @@ def run_sfm_workflow(input_folder, output_folder):
         doc.save()
 
     # Build a orthomosaic from the 3D model.
+    # To do this, first calculate the rotation angle of the orthomosaic
+    # given the camera locations. Then create an orthomosaic from planar view
+    # while using the rotation angle.
     if chunk.model and not chunk.orthomosaic:
+        # Get the reference csv, calculate rotation angle
+        gcps = pd.read_csv(reference_path)
+        model = LinearRegression().fit(gcps[['Easting']], gcps[['Northing']])
+        r = math.atan(model.coef_[0][0])
+
+        print("Rotation Angle: ", np.rad2deg(r))
+
+        # Set the planar projection
+        R = Metashape.Matrix([[math.cos(-r), -math.sin(-r), 0.0],
+                              [math.sin(-r), math.cos(-r),  0.0],
+                              [0.0,          0.0,           1.0]])
+
+        # Set the projection object
+        projection = Metashape.OrthoProjection()
+        projection.crs = chunk.crs
+        projection.matrix = Metashape.Matrix().Rotation(R)
+        projection.type = Metashape.OrthoProjection.Type.Planar
+        # Create the orthomosaic
         chunk.buildOrthomosaic(surface_data=Metashape.ModelData,
-                               fill_holes=True)
+                               blending_mode=Metashape.BlendingMode.MosaicBlending,
+                               projection=projection)
+        # Save the document
         doc.save()
 
     # Export the orthomosaic as a GeoTIFF file if it exists in the chunk.
+    # Then georeference the orthomosaic using the updated reference csv.
     if chunk.orthomosaic:
 
-        if not os.path.exists(output_orthomosaic):
-            chunk.exportRaster(output_orthomosaic, source_data=Metashape.OrthomosaicData)
-
-        # Identifying a cameras's origin (0, 0)
+        # Identifying a cameras's middle projected onto the mesh, orthomosaic
         x_pixels = []
         y_pixels = []
         image_names = []
 
+        # For each camera, project the camera center onto the mesh, orthomosaic
+        # Then get the pixel coordinates of the point on the orthomosaic
+        # Then add the pixel coordinates and image name to the lists
+        # Then add the lists to the reference csv, output to a new csv.
         for camera in chunk.cameras:
             try:
-                width, height = camera.sensor.width//2, camera.sensor.height//2
+                width, height = camera.sensor.width // 2, camera.sensor.height // 2
                 p = chunk.model.pickPoint(camera.center, camera.unproject(Metashape.Vector((width, height, 1))))
                 P = chunk.orthomosaic.crs.project(chunk.transform.matrix.mulp(p))
                 x = int((P.x - chunk.orthomosaic.left) / chunk.orthomosaic.resolution)
@@ -140,7 +166,6 @@ def run_sfm_workflow(input_folder, output_folder):
 
                 # Add a marker to the chunk
                 chunk.addMarker(point=p)
-
             except:
                 print("ERROR: Could not project camera ", camera.label)
                 x = None
@@ -150,18 +175,26 @@ def run_sfm_workflow(input_folder, output_folder):
             y_pixels.append(y)
             image_names.append(camera.label)
 
+        # Save the chunk with markers
+        doc.save()
+
+        # Add the lists to the reference csv
+        # Then save the csv
         gdf['image_label'] = image_names
         gdf['x_pixels'] = x_pixels
         gdf['y_pixels'] = y_pixels
         new_reference_path = output_folder + "/new_image_centroids.csv"
         gdf.to_csv(new_reference_path)
 
-        doc.save()
+        # Export the orthomosaic as a GeoTIFF file if it doesn't already exist
+        if not os.path.exists(output_orthomosaic):
+            chunk.exportRaster(output_orthomosaic, source_data=Metashape.OrthomosaicData)
+            doc.save()
 
+        # If the orthomosaic and the reference csv exist, georeference the orthomosaic
         if os.path.exists(output_orthomosaic) and os.path.exists(new_reference_path):
-            # Georeference the orthomosaic
             output_geo_orthomosaic = output_folder + "/GeoOrthomosaic.tif"
-            georeference_ortho(output_orthomosaic, output_geo_orthomosaic, reference_path)
+            georeference_orthomosaic(output_orthomosaic, output_geo_orthomosaic, new_reference_path)
 
     # Print a message indicating that the processing has finished and the results have been saved.
     print('Processing finished, results saved to ' + output_folder + '.')
