@@ -3,6 +3,7 @@ import os, sys, time
 
 import numpy as np
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from create_tif import *
 from georeference import *
@@ -42,6 +43,7 @@ def run_sfm_workflow(input_folder, output_folder):
 
     # Create the reference csv, get the path.
     gdf, reference_path = create_reference_csv(input_folder)
+    new_reference_path = output_folder + "/new_image_centroids.csv"
 
     # Call the "find_files" function to get a list of photo file paths
     # with specified extensions from the image folder. ".jpeg", ".tif", ".tiff"
@@ -68,22 +70,7 @@ def run_sfm_workflow(input_folder, output_folder):
     # Add the photos to the chunk.
     if not chunk.cameras:
         chunk.addPhotos(photos)
-        doc.save()
-
-    # Print the number of images that were successfully loaded into the chunk.
-    print(str(len(chunk.cameras)) + " images loaded")
-
-    # Estimate image quality, remove those that are blurry
-    if chunk.cameras:
-        print("Checking image quality")
-        # quality_threshold = 0.2
-        # for camera in tqdm(chunk.cameras):
-        #     camera_quality = Metashape.Utils.estimateImageQuality(camera.image())
-        #     if float(camera_quality) < quality_threshold:
-        #         print("Removing Low Quality Camera: ", camera.label)
-        #         camera.enabled = False
-
-        print("Remaining # Cameras: ", len([c for c in chunk.cameras if c.enabled]))
+        print(str(len(chunk.cameras)) + " images loaded")
         doc.save()
 
     # Match the photos by finding common features and establishing correspondences.
@@ -93,15 +80,9 @@ def run_sfm_workflow(input_folder, output_folder):
                           generic_preselection=True,
                           reference_preselection=True,
                           downscale=1)
-        # Save the document
-        doc.save()
 
         # Align the cameras to estimate their relative positions in space.
         chunk.alignCameras()
-        doc.save()
-
-        # Optimize camera alignment
-        chunk.optimizeCameras()
         doc.save()
 
     # Build depth maps (2.5D representations of the scene) from the aligned photos.
@@ -114,22 +95,35 @@ def run_sfm_workflow(input_folder, output_folder):
         chunk.buildModel(source_data=Metashape.DepthMapsData)
         doc.save()
 
-    # Build a orthomosaic from the 3D model.
-    # To do this, first calculate the rotation angle of the orthomosaic
-    # given the camera locations. Then create an orthomosaic from planar view
-    # while using the rotation angle.
+    # For each camera, project the camera center onto the mesh, to
+    # determine if the camera is aligned
+    camera_aligned = []
+    for camera in chunk.cameras:
+        try:
+            # Get the camera center, project it onto the mesh
+            width, height = camera.sensor.width // 2, camera.sensor.height // 2
+            p = chunk.model.pickPoint(camera.center, camera.unproject(Metashape.Vector((width, height, 1))))
+            # Add a marker to the chunk
+            chunk.addMarker(point=p)
+            # Set aligned to True
+            aligned = True
+        except:
+            print("ERROR: Could not project camera ", camera.label)
+            aligned = False
+
+        camera_aligned.append(aligned)
+
+    # Add the lists to the reference csv
+    gdf['aligned'] = camera_aligned
+    gdf.to_csv(new_reference_path)
+    # Save the document
+    doc.save()
+
     if chunk.model and not chunk.orthomosaic:
-        # Get the reference csv, calculate rotation angle
-        gcps = pd.read_csv(reference_path)
-        model = LinearRegression().fit(gcps[['Easting']], gcps[['Northing']])
-        r = math.atan(model.coef_[0][0])
-
-        print("Rotation Angle: ", np.rad2deg(r))
-
-        # Set the planar projection
-        R = Metashape.Matrix([[math.cos(-r), -math.sin(-r), 0.0],
-                              [math.sin(-r), math.cos(-r),  0.0],
-                              [0.0,          0.0,           1.0]])
+        # Local coordinate system transformation matrix
+        R = Metashape.Matrix(np.array([[1.0,  0.0, 0.0],
+                                       [0.0, -1.0, 0.0],
+                                       [0.0,  0.0, 1.0]]))
 
         # Set the projection object
         projection = Metashape.OrthoProjection()
@@ -164,8 +158,6 @@ def run_sfm_workflow(input_folder, output_folder):
                 x = int((P.x - chunk.orthomosaic.left) / chunk.orthomosaic.resolution)
                 y = int((chunk.orthomosaic.top - P.y) / chunk.orthomosaic.resolution)
 
-                # Add a marker to the chunk
-                chunk.addMarker(point=p)
             except:
                 print("ERROR: Could not project camera ", camera.label)
                 x = None
@@ -183,7 +175,6 @@ def run_sfm_workflow(input_folder, output_folder):
         gdf['image_label'] = image_names
         gdf['x_pixels'] = x_pixels
         gdf['y_pixels'] = y_pixels
-        new_reference_path = output_folder + "/new_image_centroids.csv"
         gdf.to_csv(new_reference_path)
 
         # Export the orthomosaic as a GeoTIFF file if it doesn't already exist
@@ -193,8 +184,7 @@ def run_sfm_workflow(input_folder, output_folder):
 
         # If the orthomosaic and the reference csv exist, georeference the orthomosaic
         if os.path.exists(output_orthomosaic) and os.path.exists(new_reference_path):
-            output_geo_orthomosaic = output_folder + "/GeoOrthomosaic.tif"
-            georeference_orthomosaic(output_orthomosaic, output_geo_orthomosaic, new_reference_path)
+            georeference_orthomosaic(output_orthomosaic, new_reference_path)
 
     # Print a message indicating that the processing has finished and the results have been saved.
     print('Processing finished, results saved to ' + output_folder + '.')
@@ -211,7 +201,7 @@ if __name__ == '__main__':
     # Loop through all the folders
     for image_folder in image_folders:
 
-        if not "GV027" in image_folder:
+        if not image_folder in ["GV027"]:
             continue
 
         try:
