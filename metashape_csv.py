@@ -80,7 +80,12 @@ if __name__ == "__main__":
     #    just dumping all of them at once
 
     # Write the georeferenced images...
-    towline.write_georeferenced_images()
+    #towline.write_georeferenced_images()
 
     # Dump the GDFs...
+    #towline.dump_gdfs()
+
+    # Write metashape CSV...
+    towline.write_metashape_csv()
+
     towline.dump_gdfs()

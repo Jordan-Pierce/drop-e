@@ -118,8 +118,6 @@ class TowLine:
         """ Given a directory of images, extract the relevant EXIF data and build a
         GeoPandasDataFrame (gdf) from this information. """
 
-
-
         imgs = [i for i in os.listdir(self.img_dir) if i.endswith(allowed_img_ext)]
         print(f"Found {len(imgs)} images in {self.img_dir}...")
 
@@ -130,7 +128,7 @@ class TowLine:
 
 
         if geoexifs[0]['GPS_Latitude_DMS'] is not None and geoexifs[0]['GPS_Longitude_DMS'] is not None:
-            epsg = utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
+            epsg = self.utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
             self.epsg_str = f"epsg:{epsg}"
 
             img_df = pd.DataFrame(geoexifs)
@@ -658,6 +656,14 @@ class TowLine:
         in_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
 
     """PLOTTING + WRITING FCNS"""
+    def write_metashape_csv(self):
+        self.fit_gdf['Easting'] = self.fit_gdf.geometry.x
+        self.fit_gdf['Northing'] = self.fit_gdf.geometry.y
+        self.fit_gdf['Elevation'] = self.fit_gdf[self.alt_field]
+
+        out_gdf = self.fit_gdf[['img_name', 'Easting', 'Northing', 'Elevation']]
+        out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
+
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
         target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'], axis=1, inplace=True, errors='ignore')
