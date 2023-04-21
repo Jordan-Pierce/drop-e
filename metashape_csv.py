@@ -61,31 +61,8 @@ if __name__ == "__main__":
                     args.filter_quartile, args.process_noise_std,
                     args.measurement_noise_std)
 
-    # Currently a TowLine object has the following exposed methods:
-    #  - write_georeferenced_images() - to write georeferenced images to disk
-    #  - dump_gdfs() - to dump all vector GDFs to disk
-    #  - plot_smoothing_operation() - generates a plot of the trackline smoothing operation
-    #    which is useful for debugging and testing
-    #  - plot_usbl_fit() - generates a plot showing where USBL points are falling on the
-    #    trackline, which is useful for debugging and testing
-    #  - plot_rotate() - generates a plot showing the rotation of points about an axis.
-    #    This is useful for debugging and testing
-
-    # TO ADD:
-    #  - plot_georeferencing() - generates a plot showing the footprints of georeferenced
-    #    images on a map. This is useful for debugging and testing
-    #  - write_orthorectied_images() - to write orthorectified images to disk (once a
-    #    DEM / depth mask is available)
-    #  - dump_XXXX() - expose the commands to save individual GDFs to disk, rather than
-    #    just dumping all of them at once
-
-    # Write the georeferenced images...
-    #towline.write_georeferenced_images()
-
     # Dump the GDFs...
-    #towline.dump_gdfs()
+    towline.dump_gdfs()
 
     # Write metashape CSV...
     towline.write_metashape_csv()
-
-    towline.dump_gdfs()
