@@ -71,7 +71,7 @@ class TowLine:
         # only one will be populated...
         self.raw_usbl_traj = None
         self.smooth_usbl_traj = None
-        self.smooth_usbl_traj_line = None
+        self.smooth_usbl_traj_line =  None
 
         self.epsg_str = None
         self.max_gsd_mode = 0.0
@@ -127,7 +127,7 @@ class TowLine:
             geoexifs.append(geoexif)
 
         if geoexifs[0]['GPS_Latitude_DMS'] is not None and geoexifs[0]['GPS_Longitude_DMS'] is not None:
-            epsg = self._utm_epsg_from_latlon(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
+            epsg = self.utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
             self.epsg_str = f"epsg:{epsg}"
 
             img_df = pd.DataFrame(geoexifs)
@@ -225,8 +225,8 @@ class TowLine:
                 exif_dict['UTM_Easting'] = east1
                 exif_dict['UTM_Northing'] = north1
                 exif_dict['Estimated_UTM_Zone'] = str(zone) + zoneLetter
-                exif_dict['Estimated_UTM_EPSG'] = self._utm_epsg_from_latlon(exif_dict['GPS_Latitude_DD'],
-                                                                             exif_dict['GPS_Longitude_DD']
+                exif_dict['Estimated_UTM_EPSG'] = self._utm_epsg_from_latlot(
+                exif_dict['GPS_Latitude_DD'], exif_dict['GPS_Longitude_DD']
                 )
             else:
                 print(f"WARNING: No GPS data found in {img}.")
@@ -237,14 +237,14 @@ class TowLine:
 
         return exif_dict
 
-    def _utm_epsg_from_latlon(self, lat, lon):
+    def _utm_epsg_from_latlot(lat, lon):
         """ Given a lat/long, return the UTM EPSG code.
         source: https://github.com/Turbo87/utm/issues/51"""
 
         zone = utm.from_latlon(lat, lon)[2]
         return f"326{zone:02d}" if lat >= 0 else f"327{zone:02d}"
 
-    def _dms_to_dd(self, dms, direction, verbose=False) -> float:
+    def _dms_to_dd(dms, direction, verbose=False) -> float:
         """
         Converts a lat or long in Degree/Minutes/Seconds format to Decimal Degrees.
 
@@ -303,7 +303,6 @@ class TowLine:
         usbl_gdf["datetime_idx"] = usbl_gdf[self.datetime_field].apply(
             lambda x: datetime.strptime(re.sub('[/.:]', '-', x), '%Y-%m-%d %H-%M-%S')
         )
-
         usbl_gdf.index = usbl_gdf['datetime_idx']
 
         # these will be used to filter out the images that don't have USBL data during
@@ -617,9 +616,6 @@ class TowLine:
         factor, and write this resampled image data to disk with the new geometry and CRS
         information. The output images are effectively georeferenced.
         """
-        # Write output dir if it doesn't already exist
-        os.makedirs(self.out_dir, exist_ok=True)
-
         # use rasterio to write image with crs and transform
         img_transform = self.transforms[row.img_name]
         output_file = os.path.join(self.out_dir, row.img_name)
@@ -659,6 +655,14 @@ class TowLine:
         in_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
 
     """PLOTTING + WRITING FCNS"""
+    def write_metashape_csv(self):
+        self.fit_gdf['Easting'] = self.fit_gdf.geometry.x
+        self.fit_gdf['Northing'] = self.fit_gdf.geometry.y
+        self.fit_gdf['Elevation'] = self.fit_gdf[self.alt_field]
+
+        out_gdf = self.fit_gdf[['img_name', 'Easting', 'Northing', 'Elevation']]
+        out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
+
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
         target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'], axis=1, inplace=True, errors='ignore')

@@ -47,7 +47,7 @@ def run_sfm_workflow(input_folder, output_folder):
 
     # Call the "find_files" function to get a list of photo file paths
     # with specified extensions from the image folder. ".jpeg", ".tif", ".tiff"
-    photos = find_files(input_folder, [".jpg"])
+    photos = find_files(output_folder + "/images", [".jpg"])
 
     # Create a metashape doc object
     doc = Metashape.Document()
@@ -66,11 +66,18 @@ def run_sfm_workflow(input_folder, output_folder):
 
     # Assign the chunk
     chunk = doc.chunk
+    # Set the chunk's coordinate system to UTM Zone 55N
+    chunk.crs = Metashape.CoordinateSystem("EPSG::32655")
 
     # Add the photos to the chunk.
     if not chunk.cameras:
         chunk.addPhotos(photos)
         print(str(len(chunk.cameras)) + " images loaded")
+        # Provide reference data to the chunk.
+        chunk.importReference(reference_path,
+                              format=Metashape.ReferenceFormatCSV,
+                              columns='nxyz[XYZ]',
+                              delimiter=',')
         doc.save()
 
     # Match the photos by finding common features and establishing correspondences.
@@ -113,14 +120,15 @@ def run_sfm_workflow(input_folder, output_folder):
 
         camera_aligned.append(aligned)
 
-    # Add the lists to the reference csv
+    # Add the list of which cameras were actually aligned to the reference csv, save
     gdf['aligned'] = camera_aligned
     gdf.to_csv(new_reference_path)
+    
     # Save the document
     doc.save()
 
     if chunk.model and not chunk.orthomosaic:
-        # Local coordinate system transformation matrix
+        # Local coordinate system transformation matrix for planar XY Top-down view
         R = Metashape.Matrix(np.array([[1.0,  0.0, 0.0],
                                        [0.0, -1.0, 0.0],
                                        [0.0,  0.0, 1.0]]))
@@ -201,13 +209,13 @@ if __name__ == '__main__':
     # Loop through all the folders
     for image_folder in image_folders:
 
-        if not image_folder in ["GV027"]:
-            continue
+        # Test site
+        if image_folder in ["GV027"]:
 
-        try:
-            input_folder = ROOT + image_folder + "/"
-            output_folder = input_folder.replace("Geo", "Not_Geo")
-            run_sfm_workflow(input_folder, output_folder)
+            try:
+                input_folder = ROOT + image_folder + "/"
+                output_folder = input_folder.replace("Geo", "Not_Geo")
+                run_sfm_workflow(input_folder, output_folder)
 
-        except Exception as e:
-            print(e, "\nIssue with: ", image_folder)
+            except Exception as e:
+                print(e, "\nIssue with: ", image_folder)

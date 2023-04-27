@@ -20,45 +20,51 @@ from osgeo import gdal, osr
 def create_reference_csv(input_folder):
     """Takes in an input folder, tries to find the image_centroids.gpkg,
     opens it using geopandas, creates a new version containing only a few
-    columns needed for metashape."""
+    columns needed for metashape, saves and returns to calling function.
 
+    Note: this performs the same thing as write_metashape_csv in monoplotting.py"""
+
+    # Finds files with the name "image_centroids.gpkg" in the input folder
     files = [file for file in glob.glob(input_folder + "*.gpkg") if "image_centroid" in file]
 
     if len(files) == 1:
         file = files[0]
     else:
         # Error identifying the image_centroids.gpkg
-        sys.exit()
+        raise ValueError("ERROR: Could not find image_centroids.gpkg in folder: ", input_folder)
 
     # Load GeoPackage file into a GeoDataFrame
     gdf = gpd.read_file(file)
 
     # Extract "img_name" and "GPS_Altitude" columns and rename them
-    gdf_ = gdf[["img_name"]].rename(columns={"img_name": "Label"})
+    gdf_metashape = gdf[["img_name"]].rename(columns={"img_name": "Label"})
 
     # Split point geometry into separate columns for easting and northing
-    gdf_['Easting'] = gdf['geometry'].apply(lambda p: p.x)
-    gdf_['Northing'] = gdf['geometry'].apply(lambda p: p.y)
-    gdf_['Altitude'] = gdf['CaAltCor_m']
+    gdf_metashape['Easting'] = gdf['geometry'].apply(lambda p: p.x)
+    gdf_metashape['Northing'] = gdf['geometry'].apply(lambda p: p.y)
+    gdf_metashape['Altitude'] = gdf['CaAltCor_m']
 
     # Output file
     out_file = file.replace(".gpkg", ".csv")
 
     # Save the csv
-    gdf_.to_csv(out_file, index=False)
+    gdf_metashape.to_csv(out_file, index=False)
 
+    # cHeck that the file was created
     if os.path.exists(out_file):
         print("Created Reference: ", out_file)
     else:
         print("ERROR: Could not create Reference: ", out_file)
         out_file = None
 
-    return gdf_, out_file
+    return gdf_metashape, out_file
 
 
 def get_rotation_angle(gdf, output_folder):
-    """Takes in a geodataframe with the camera locations and whether they are aligned,
-    returns the rotation angle of the orthomosaic."""
+    """Takes in a geodataframe with the camera locations, returns the rotation angle of the orthomosaic."""
+
+    # TODO: need to determine that the rotation angle is calculated correctly regardless of the order of the images.
+    # TODO: need to ensure that the rotation angle is being applied correctly when using Metashape API.
 
     # Calculate the rotation angle of the orthomosaic given the camera locations that are aligned.
     gcps = gdf[gdf['aligned'] == True][['Easting', 'Northing']]
@@ -66,11 +72,14 @@ def get_rotation_angle(gdf, output_folder):
     # From first point in order to last point
     X = gcps['Easting'].values.reshape(-1, 1)
     Y = gcps['Northing'].values.reshape(-1, 1)
+
     # Calculate the rotation angle of just those cameras
     model = LinearRegression().fit(X, Y)
+
     # Get the rotation angle
     r = math.atan(model.coef_[0][0])
     print("Rotation Angle: ", np.rad2deg(r))
+
     # Plot the UTM points and the slope of the model
     fig, ax = plt.subplots()
     ax.scatter(gcps['Easting'].values, gcps['Northing'].values, color='blue')
@@ -78,7 +87,7 @@ def get_rotation_angle(gdf, output_folder):
     ax.set_xlabel('Easting')
     ax.set_ylabel('Northing')
     ax.set_title(f"Rotation Angle: {np.rad2deg(r)} degrees")
-
+    plt.savefig(os.path.join(output_folder, "rotation_angle.png"))
     plt.show()
 
     return r
