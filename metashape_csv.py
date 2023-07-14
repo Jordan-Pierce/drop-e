@@ -2,23 +2,27 @@ from classes.monoplotting import TowLine
 import argparse
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--image_dir", "-i",
                         type=str,
+                        default="B://Drop_e/Not_Geo/GV027/images/",
                         help="Path to a directory containing underwater towcam imagery.")
 
     parser.add_argument("--out_dir", "-o",
                         type=str,
+                        default="B://Drop_e/Geo/GV027/New/",
                         help="Path to a directory where output files will be saved.")
 
     parser.add_argument("--usbl_path", "-u",
+                        default="B://Drop_e/ForOrbitalAI.gdb",
                         type=str,
                         help="Path to a GIS file containing USBL GPS points.")
 
     parser.add_argument("--datetime_field", "-df",
                         type=str,
-                        default="DateTime",
+                        default="GUDateTime",
                         help="Name of the field in the USBL attribute table that contains temporal \
                 information. Default value is 'DateTime'.")
 
@@ -31,7 +35,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--elevation_field", "-ef",
                         type=str,
-                        default="CaCorAlt",
+                        default="CaAltCor_m",
                         help="Name of the field in the USBL attribute table that \
                         contains elevation (depth) values. Default value is \
                         'CaCorAlt'.")

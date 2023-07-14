@@ -1,3 +1,6 @@
+# TODO Get database containing PDOP fields :/
+# TODO Standardize the naming convention between field names, arg.parse default values, and function default values
+
 from classes.monoplotting import TowLine
 import argparse
 
@@ -7,19 +10,22 @@ if __name__ == "__main__":
 
     parser.add_argument("--image_dir", "-i",
                         type=str,
+                        default="B://Drop_e/Sites/GV176/images/",
                         help="Path to a directory containing underwater towcam imagery.")
 
     parser.add_argument("--out_dir", "-o",
                         type=str,
+                        default="B://Drop_e/Testing/GV176/",
                         help="Path to a directory where output files will be saved.")
 
     parser.add_argument("--usbl_path", "-u",
+                        default="B://Drop_e/ForOrbitalAI.gdb",
                         type=str,
                         help="Path to a GIS file containing USBL GPS points.")
 
     parser.add_argument("--datetime_field", "-df",
                         type=str,
-                        default="DateTime",
+                        default="GUDateTime",
                         help="Name of the field in the USBL attribute table that contains temporal \
                 information. Default value is 'DateTime'.")
 
@@ -32,7 +38,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--elevation_field", "-ef",
                         type=str,
-                        default="CaCorAlt",
+                        default="CaAltCor_m",
                         help="Name of the field in the USBL attribute table that \
                         contains elevation (depth) values. Default value is \
                         'CaCorAlt'.")
@@ -64,9 +70,14 @@ if __name__ == "__main__":
     # the input arguments. This processing chain computes vector files (GDFs) and meta-
     # data (stored in GDF attribute tables) that pertain to georeferencing of imagery.
 
-    towline = TowLine(args.image_dir, args.out_dir, args.usbl_path,
-                      args.datetime_field, args.pdop_field, args.elevation_field,
-                      args.filter_quartile, args.process_noise_std,
+    towline = TowLine(args.image_dir,
+                      args.out_dir,
+                      args.usbl_path,
+                      args.datetime_field,
+                      args.pdop_field,
+                      args.elevation_field,
+                      args.filter_quartile,
+                      args.process_noise_std,
                       args.measurement_noise_std)
 
     # Currently a TowLine object has the following exposed methods:
@@ -89,6 +100,9 @@ if __name__ == "__main__":
 
     # Write the georeferenced images...
     towline.write_georeferenced_images()
+
+    # Write the metashape csv file..
+    towline.write_metashape_csv()
 
     # Dump the GDFs...
     towline.dump_gdfs()

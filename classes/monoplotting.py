@@ -47,6 +47,10 @@ class TowLine:
 
         self.img_dir = img_dir
         self.out_dir = out_dir
+
+        # Make the output directory if it doesn't exist..
+        os.makedirs(self.out_dir, exist_ok=True)
+
         self.usbl_path = usbl_path
 
         self.datetime_field = datetime_field
@@ -174,7 +178,7 @@ class TowLine:
             img_exif = ExifImage(f)
 
             exif_dict["img_path"] = img_path
-            exif_dict["img_name"] = img
+            exif_dict["Label"] = img
 
             exif_dict['Focal_Length'] = img_exif.get('Focal_Length')
             exif_dict['Focal_Length_Unit'] = "millimeters"
@@ -588,7 +592,7 @@ class TowLine:
         transform = from_gcps(gcps)
         # print(transform, type(transform))
 
-        self.transforms[row.img_name] = transform
+        self.transforms[row.Label] = transform
 
     def orient_images(self, in_gdf):
         """ Given a GeoDataFrame of images, run a series of pandas apply functions to
@@ -606,7 +610,7 @@ class TowLine:
 
         self._apply_transform(in_gdf)
 
-        self.bbox_gdf = in_gdf[['img_path', 'img_name', 'bbox']].copy()
+        self.bbox_gdf = in_gdf[['img_path', 'Label', 'bbox']].copy()
         self.bbox_gdf.geometry = self.bbox_gdf.bbox
         self.bbox_gdf.crs = self.epsg_str
 
@@ -617,11 +621,11 @@ class TowLine:
         information. The output images are effectively georeferenced.
         """
         # use rasterio to write image with crs and transform
-        img_transform = self.transforms[row.img_name]
-        output_file = os.path.join(self.out_dir, row.img_name)
+        img_transform = self.transforms[row.Label]
+        output_file = os.path.join(self.out_dir, row.Label)
 
         with rasterio.open(row.img_path, 'r') as src:
-            data=src.read()
+            data = src.read()
             with rasterio.open(output_file, 'w', **src.profile) as dst:
                 out_data = src.read(
                     out_shape=(
@@ -639,7 +643,7 @@ class TowLine:
                 )
 
                 dst.write(out_data)
-        print(f"Finished writing {row.img_name} to {output_file}")
+        print(f"Finished writing {row.Label} to {output_file}")
 
     def write_georeferenced_images(self):
         """ Given a GeoDataFrame of images (rows), run a pandas apply function to open
@@ -658,14 +662,16 @@ class TowLine:
     def write_metashape_csv(self):
         self.fit_gdf['Easting'] = self.fit_gdf.geometry.x
         self.fit_gdf['Northing'] = self.fit_gdf.geometry.y
-        self.fit_gdf['Elevation'] = self.fit_gdf[self.alt_field]
+        self.fit_gdf['Altitude'] = self.fit_gdf[self.alt_field]
 
-        out_gdf = self.fit_gdf[['img_name', 'Easting', 'Northing', 'Elevation']]
+        out_gdf = self.fit_gdf[['Easting', 'Northing', 'Altitude', 'DateTime']]
+        out_gdf['Label'] = self.fit_gdf['Label']
         out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
 
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
-        target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'], axis=1, inplace=True, errors='ignore')
+        target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'],
+                        axis=1, inplace=True, errors='ignore')
 
         if format == "GPKG":
             out_path = os.path.join(self.out_dir, f"{basename}.gpkg")
@@ -767,3 +773,5 @@ class TowLine:
         plt.plot(pts2, 'o', color='blue', label="Rot")
 
         plt.show()
+
+
