@@ -112,9 +112,6 @@ class TowLine:
         print("FIT IMGS TO USBL")
         self.fit_to_usbl()
 
-        print("ESTIMATE GSD")
-        self.apply_gsd()
-
         # Step 5: Round out the internal / external orientation parameters needed for
         # georeferencing OR orthorectification, and perform the operation.
         print("ORIENT IMAGES")
@@ -372,7 +369,7 @@ class TowLine:
         the ground spacing distance (GSD) for each image's X and Y dimensions, and
         sets new columns specifying which is the min and max GSD.
         """
-
+        print("ESTIMATING GSD")
         # Extract the ground spacing distance from each row of the.img_gdf
         self.img_gdf["GSD_W"] = self.img_gdf.apply(
             lambda row: self.__calc_gsd(row, height=False), axis=1)
@@ -418,6 +415,7 @@ class TowLine:
         only estimated here, the actual upscaling operation happens when the image
         data is actually read and warped by rasterio.
         """
+        print("ESTIMATING UPSCALE FACTOR")
         # Extract the ground spacing distance from each row of the.img_gdf
         self.img_gdf["Upscale_Factor"] = self.img_gdf.apply(
             lambda row: self.max_gsd_mode / row.GSD_MAX, axis=1)
@@ -425,6 +423,8 @@ class TowLine:
     def _apply_corner_gcps(self):
         """ Given a GeoDataFrame of images, run a pandas apply function that rotates
         the corner gcps of each image to match the direction (bearing) of the image."""
+
+        print("ESTIMATING GCPs")
         # Extract the ground spacing distance from each row of the.img_gdf
         self.img_gdf['bbox'] = self.img_gdf.apply(lambda row: self.__rotate_corner_gcps(row), axis=1)
 
@@ -490,6 +490,7 @@ class TowLine:
         matrix for each image. This affine transform is used to reference or warp the
         image data to a common coordinate system.
         """
+        print("BUILDING AFFINE TRANSFORMS")
         # Create an affine transform for each image
         self.img_gdf.apply(lambda row: self.__calc_transform(row), axis=1)
 
@@ -518,7 +519,7 @@ class TowLine:
         """ Given a GeoDataFrame of images (rows), run a pandas apply function to open
         the original image, resample to a new GSD, and write to the output directory.
         """
-
+        print("WRITING GEOREFERENCED IMAGES")
         # Extract the ground spacing distance from each row of the.img_gdf
         self.img_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
     
@@ -553,10 +554,9 @@ class TowLine:
                 dst.write(out_data)
         print(f"Finished writing {row.Label} to {output_file}")
 
-
-
     """PLOTTING + WRITING FCNS"""
     def write_metashape_csv(self):
+        print("WRITING METASHAPE CSV")
         self.img_gdf['Easting'] = self.img_gdf.geometry.x
         self.img_gdf['Northing'] = self.img_gdf.geometry.y
         self.img_gdf['Altitude'] = self.img_gdf[self.alt_field]
@@ -565,23 +565,8 @@ class TowLine:
         # out_gdf['Label'] = self.img_gdf['Label']
         out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
 
-    def _write_gdf(self, in_gdf, basename, format="GPKG", index=False):
-        # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
-        in_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'],
-                        axis=1, inplace=True, errors='ignore')
-
-        if format == "GPKG":
-            out_path = os.path.join(self.out_dir, f"{basename}.gpkg")
-        elif format == "ESRI Shapefile":
-            out_path = os.path.join(self.out_dir, f"{basename}.shp")
-        else:
-            raise ValueError(f"Invalid geospatial format: {format}. Must be GPKG or ESRI Shapefile.")
-
-        in_gdf.to_file(
-            out_path, driver=format, index=index
-        )
-
     def dump_gdfs(self):
+        print("DUMPING GDFs")
         # TODO: carry output format through script (gpkg vs shp)
         if self.img_gdf is not None:
             self._write_gdf(self.img_gdf, "image_centroids", format="GPKG", index=False)
@@ -598,3 +583,19 @@ class TowLine:
         if self.bbox_gdf is not None:
             self._write_gdf(self.bbox_gdf, "image_bboxes", format="GPKG", index=False)
         f, ax = plt.subplots()
+    
+    def _write_gdf(self, in_gdf, basename, format="GPKG", index=False):
+        # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
+        in_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'],
+                        axis=1, inplace=True, errors='ignore')
+
+        if format == "GPKG":
+            out_path = os.path.join(self.out_dir, f"{basename}.gpkg")
+        elif format == "ESRI Shapefile":
+            out_path = os.path.join(self.out_dir, f"{basename}.shp")
+        else:
+            raise ValueError(f"Invalid geospatial format: {format}. Must be GPKG or ESRI Shapefile.")
+
+        in_gdf.to_file(
+            out_path, driver=format, index=index
+        )
