@@ -10,16 +10,16 @@ if __name__ == "__main__":
 
     parser.add_argument("--image_dir", "-i",
                         type=str,
-                        default="B://Drop_e/Sites/GV176/images/",
+                        default="/Users/ross/Documents/git/drop-e_inputs/Sites_ross2023/AA278",
                         help="Path to a directory containing underwater towcam imagery.")
 
     parser.add_argument("--out_dir", "-o",
                         type=str,
-                        default="B://Drop_e/Testing/GV176/",
+                        default="/Users/ross/Documents/git/drop-e_outputs/Sep1/AA278_test2",
                         help="Path to a directory where output files will be saved.")
 
     parser.add_argument("--usbl_path", "-u",
-                        default="B://Drop_e/ForOrbitalAI.gdb",
+                        default="/Users/ross/Documents/git/drop-e_inputs/Sites_ross2023/AA278/AA278.gpkg",
                         type=str,
                         help="Path to a GIS file containing USBL GPS points.")
 
@@ -98,11 +98,11 @@ if __name__ == "__main__":
     #  - dump_XXXX() - expose the commands to save individual GDFs to disk, rather than
     #    just dumping all of them at once
 
-    # Write the georeferenced images...
-    towline.write_georeferenced_images()
-
     # Write the metashape csv file..
     towline.write_metashape_csv()
-
+    
     # Dump the GDFs...
     towline.dump_gdfs()
+
+    # Write the georeferenced images...
+    towline.write_georeferenced_images()
