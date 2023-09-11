@@ -598,8 +598,8 @@ class TowLine:
         """
         self.apply_gsd(in_gdf)
 
-        self.gsd_mode_max = in_gdf.GSD_MAX.mode().max()
-        print(f"Mode of Max GSD: {self.gsd_mode_max}")
+        self.max_gsd_mode = in_gdf.GSD_MAX.mode().max()
+        print(f"Mode of Max GSD: {self.max_gsd_mode}")
 
         self._apply_upscale_factor(in_gdf)
 
