@@ -8,17 +8,12 @@ from datetime import datetime
 from PIL import Image as Image
 from exif import Image as ExifImage
 
-from matplotlib import pyplot as plt
-import numpy as np
-
 import pandas as pd
 import geopandas as gpd
 import movingpandas as mpd
 from movingpandas.trajectory_smoother import KalmanSmootherCV
 
-from shapely.geometry import Point, LineString, Polygon
-import folium
-import utm
+from shapely.geometry import Point, Polygon
 
 import rasterio
 from rasterio.enums import Resampling
