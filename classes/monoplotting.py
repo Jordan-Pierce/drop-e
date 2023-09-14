@@ -67,12 +67,12 @@ class TowLine:
         self.img_gdf = None  # the imagery database
         self.usbl_pts = None  # the USBL database (Point)
 
-        self.bbox_gdf = None  # the bounding box database
-
         self.usbl_traj = None  # the movinpandas trajectory
         self.usbl_traj_lines = None # the movingpandas trajectory as lines
         self.usbl_traj_pts = None  # the movingpandas trajectory as points
         
+        self.bbox_gdf = None  # the bounding box database
+
         self.epsg_str = None
         self.max_gsd_mode = 0.0
         self.max_gsd = 0.0
@@ -110,7 +110,7 @@ class TowLine:
         self.calc_trajectory()
 
         print("FIT IMGS TO USBL")
-        self.fit_to_usbl()
+        self.fit_images_to_trajectory()
 
         # Step 5: Round out the internal / external orientation parameters needed for
         # georeferencing OR orthorectification, and perform the operation.
@@ -131,13 +131,12 @@ class TowLine:
             geoexifs.append(geoexif)
 
         img_df = pd.DataFrame(geoexifs)
-        img_df['datetime_idx'] = img_df['DateTime'].astype('datetime64[ns]')
-        img_df.index = img_df['datetime_idx']
+        img_df.index = img_df['DateTime']
 
         self.img_gdf = img_df
 
-        self.imgs_datetime_min = img_df['datetime_idx'].min()
-        self.imgs_datetime_max = img_df['datetime_idx'].max()
+        self.imgs_datetime_min = img_df['DateTime'].min()
+        self.imgs_datetime_max = img_df['DateTime'].max()
 
     def _extract_img_exif(self, img):
         """ Given an image path, extract the relevant EXIF data and return as a
@@ -165,7 +164,6 @@ class TowLine:
 
             exif_dict['Focal_Plane_X_Resolution'] = img_exif.get('focal_plane_x_resolution')
             exif_dict['Focal_Plane_Y_Resolution'] = img_exif.get('focal_plane_y_resolution')
-            #print(img_exif.get('focal_plane_resolution_unit'))
             exif_dict['Focal_Plane_Resolution_Unit'] = str.lower(
                 res_unit_lookup[img_exif.get('focal_plane_resolution_unit')]
             )
@@ -182,9 +180,7 @@ class TowLine:
 
             # Infer DateTime from Exif
             exif_dict['DateTime_Original'] = img_exif.get('datetime_original')
-            #exif_dict["DateTime"] = dateutil.parser.parse(exif_dict['DateTime_Original'])
             exif_dict['DateTime'] = datetime.strptime(re.sub('[/.:]', '-', exif_dict['DateTime_Original']), '%Y-%m-%d %H-%M-%S')
-            #print(exif_dict['DateTime'], exif_dict['DateTime_Original'])
 
         return exif_dict
 
@@ -233,8 +229,6 @@ class TowLine:
         """Given the a GeoDataFrame of USBL pings and DataFrame of image EXIF metadata, determine
         the intersection of time stamps between the two data sets (valid time range), and drop
         any USBL pings or images collected outside of the valid time range."""
-        print(self.imgs_datetime_min, self.usbl_datetime_min)
-
         valid_min = max(self.imgs_datetime_min, self.usbl_datetime_min)
         valid_max = min(self.imgs_datetime_max, self.usbl_datetime_max)
         print(f"Valid time range: {valid_min} to {valid_max}")
@@ -247,8 +241,8 @@ class TowLine:
         self.usbl_pts = self.usbl_pts[self.usbl_pts['datetime_idx'] < valid_max]
 
         # filter images by valid time range
-        self.img_gdf = self.img_gdf[self.img_gdf['datetime_idx'] > valid_min]
-        self.img_gdf = self.img_gdf[self.img_gdf['datetime_idx'] < valid_max]
+        self.img_gdf = self.img_gdf[self.img_gdf['DateTime'] > valid_min]
+        self.img_gdf = self.img_gdf[self.img_gdf['DateTime'] < valid_max]
 
         filter_usbl_count = len(self.usbl_pts)
         filter_img_count = len(self.img_gdf)
@@ -258,26 +252,14 @@ class TowLine:
     def calc_trajectory(self):
         """ Given a GeoPandas GeoDataFrame of points, calculate the trajectory with
         MovingPandas. Optionally smooth the trajectory with a Kalman filter."""
-
+        
         # calculate trajectory information with MovingPandas
-        print(f"EPSG: {self.epsg_str}")
         traj = mpd.Trajectory(self.usbl_pts, 1, t="datetime_idx", crs=self.usbl_pts.crs)
 
-        traj.add_direction(overwrite=True, name="Direction")
+        # Implement a speed-based filter...
+        # alpha of 3 is a common value according to the docs
         traj.add_speed(overwrite=True, name="Speed")
-        # traj.add_acceleration(overwrite=True, name="Acceleration")
-        traj.add_distance(overwrite=True, name="Distance")
-        # traj.add_timedelta(overwrite=True, name="TimeDelta")
-
-        #speed_thresh = traj.df['Speed'].mean() * 3
-        #print(f"Mean Speed * 3: {speed_thresh}")
-
-        #mpd.OutlierCleaner(traj).clean(v_max=speed_thresh, units='m')
         mpd.IqrCleaner(traj).clean(columns={'Speed': 3})
-
-        self.usbl_traj = traj
-        self.usbl_traj_pts = traj.to_point_gdf()
-        self.usbl_traj_lines = traj.to_line_gdf()
 
         # Smooth trajectories...
         # TODO: experiment with best methods, make smoothing optional.
@@ -286,40 +268,35 @@ class TowLine:
             s_traj = KalmanSmootherCV(traj).smooth(
                 process_noise_std=self.process_noise_std,
                 measurement_noise_std=self.measurement_noise_std)
-
+            
+            # Add common trajectory attributes...
             s_traj.add_direction(overwrite=True, name="Direction")
-            s_traj.add_speed(overwrite=True, name="Speed")
-            # s_traj.add_acceleration(overwrite=True, name="Acceleration")
+            s_traj.add_speed(overwrite=True, name="Speed")    
             s_traj.add_distance(overwrite=True, name="Distance")
-            # s_traj.add_timedelta(overwrite=True, name="TimeDelta")
-
+            # traj.add_acceleration(overwrite=True, name="Acceleration")
+            # traj.add_timedelta(overwrite=True, name="TimeDelta")
+        
+            # set the trajectory class attributes...
             self.usbl_traj = s_traj
             self.usbl_traj_pts = s_traj.to_point_gdf()
             self.usbl_traj_lines = s_traj.to_line_gdf()
         else:
             print(f"Either process_noise_std or measurement_noise_std is set to 0.0, \
                 therefore no smoothing will be applied to trackline.")
+        
+            # Add common trajectory attributes...
+            traj.add_direction(overwrite=True, name="Direction")
+            traj.add_speed(overwrite=True, name="Speed")    
+            traj.add_distance(overwrite=True, name="Distance")
+            # traj.add_acceleration(overwrite=True, name="Acceleration")
+            # traj.add_timedelta(overwrite=True, name="TimeDelta")
 
-    def _zLookup(self, datetime_field='DateTime', z_field='CameraZ'):
-        """ Given a a USBL dataframe with precise Z data, correlate and interpolate
-        Z values for all images in the image GeoDataFrame.
-        """
-        # get a list of datetimes every second between start and end:
-        start = self.usbl_datetime_min
-        stop = self.usbl_datetime_max
-        dt_list = pd.date_range(start, stop, freq='S')
-
-        # merge dt_list with usbl_gdf, fill in missing values with NaN, keep only CaAltCor_m field
-        self.usbl_traj_pts = pd.merge(dt_list.to_series(name='time_range'), self.usbl_traj_pts, how='left', left_index=True, right_index=True)
-        self.usbl_traj_pts = self.usbl_traj_pts[['time_range', z_field, datetime_field]]
-
-        # perform linear interpolation to fill in missing Z values
-        self.usbl_traj_pts[z_field].interpolate(method='linear', inplace=True)
-
-        # use usbl_dt_gdf as a lookup table to add CaAltCor_m to img_df
-        self.img_gdf[z_field] = self.img_gdf['DateTime'].map(self.usbl_traj_pts.set_index('time_range')[z_field])
-
-    def fit_to_usbl(self):
+            # set the trajectory class attributes...
+            self.usbl_traj = traj
+            self.usbl_traj_pts = traj.to_point_gdf()
+            self.usbl_traj_lines = traj.to_line_gdf()
+            
+    def fit_images_to_trajectory(self):
         """ Given a point GeoDataFrame of images, fit the images to the USBL trajectory
         line (a MovingPandas Trajectory object) using the DateTime field as the key.
 
@@ -329,19 +306,46 @@ class TowLine:
         stores this info as a GeoDataFrame of linestrings.
         """
 
-        # Fit Images to USBL using DateTime
+        # Fit Images to USBL's X/Y position using DateTime
         self.img_gdf['Improved_Position'] = self.img_gdf.apply(
             lambda row: self.usbl_traj.interpolate_position_at(row.DateTime), axis=1
         )
 
+        # Set the X/Y position as the geometry, create a new GeoDataFrame with this info
         self.img_gdf = gpd.GeoDataFrame(self.img_gdf, geometry=self.img_gdf.Improved_Position, crs=self.epsg_str)
         self.img_gdf.drop(columns=['Improved_Position'], inplace=True)
         self.img_gdf.sort_index(inplace=True)
 
-        # fit the direction (degrees) and Z (height) values from USBL
-        self.img_gdf = pd.merge_asof(self.img_gdf, self.usbl_traj_pts[['Direction']], left_index=True, right_index=True)
+        # Fit each Image with an interpolated Z value (altitude) from the USBL, store as a new column
+        self._zLookup()
 
-        self._zLookup(z_field=self.alt_field, datetime_field=self.datetime_field)
+        # Fit each image with the direction (bearing) from the USBL trackline, store as a new column
+        self.img_gdf['Direction'] = float('-999.0')
+        for idx, row in self.img_gdf.iterrows():
+            current_row = self.usbl_traj.get_row_at(idx)
+            
+            self.img_gdf.at[idx, 'Direction'] = current_row['Direction']
+            #row['Direction'] = current_row['Direction']
+
+    def _zLookup(self):
+        """ Given a a USBL dataframe with precise Z data, correlate and interpolate
+        Z values for all images in the image GeoDataFrame.
+        """
+        # get a list of datetimes every second between start and end:
+        start = self.usbl_datetime_min
+        stop = self.usbl_datetime_max
+        dt_list = pd.date_range(start, stop, freq='S')
+
+        # merge dt_list with usbl_gdf, fill in missing values with NaN
+        self.usbl_traj_pts = pd.merge(dt_list.to_series(name='time_range'), self.usbl_traj_pts, how='left', left_index=True, right_index=True)
+        #self.usbl_traj_pts = self.usbl_traj_pts[['time_range', self.alt_field, self.datetime_field]]
+
+        # perform linear interpolation to fill in missing Z values
+        self.usbl_traj_pts[self.alt_field].interpolate(method='linear', inplace=True)
+
+        # use usbl_dt_gdf as a lookup table to add CaAltCor_m to img_df
+        self.img_gdf[self.alt_field] = self.img_gdf['DateTime'].map(self.usbl_traj_pts.set_index('time_range')[self.alt_field])
+
 
     """GEOREF FCNS"""
     def orient_images(self):
@@ -351,8 +355,7 @@ class TowLine:
         """
         self._apply_gsd()
 
-        self.gsd_mode_max = self.img_gdf.GSD_MAX.mode().max()
-        print(f"Mode of Max GSD: {self.gsd_mode_max}")
+        self.max_gsd_mode = self.img_gdf.GSD_MAX.mode().max()
 
         self._apply_upscale_factor()
 
@@ -447,7 +450,6 @@ class TowLine:
         br = (right, bottom, 0)
         tl = (left, top, 0)
         tr = (right, top, 0)
-        cols, rows = row.Pixel_X_Dimension, row.Pixel_Y_Dimension
         origin = (center_x, center_y, 0)
 
         rot_tl = self.___rotate_point_3d(tl, math.radians(row.Direction), 'z', origin=origin)  # NOTE: may want to cut the custom code here in favor of a shapely poly rotation...
@@ -498,7 +500,6 @@ class TowLine:
         """ This function contains the operations required to extract image GCPs and
         generate an affine transformation matrix (rasterio does the heavy lifting here).
         """
-        # print(len(row.bbox.exterior.coords[0:4]))
         tl, tr, br, bl = row.bbox.exterior.coords[0:4]
         cols, rows = row.Pixel_X_Dimension, row.Pixel_Y_Dimension
 
@@ -511,8 +512,6 @@ class TowLine:
         ]
 
         transform = from_gcps(gcps)
-        # print(transform, type(transform))
-
         self.transforms[row.Label] = transform
 
     def write_georeferenced_images(self):
@@ -560,9 +559,9 @@ class TowLine:
         self.img_gdf['Easting'] = self.img_gdf.geometry.x
         self.img_gdf['Northing'] = self.img_gdf.geometry.y
         self.img_gdf['Altitude'] = self.img_gdf[self.alt_field]
+        self.img_gdf['Altitude_Unit'] = "meters"
 
-        out_gdf = self.img_gdf[['Easting', 'Northing', 'Altitude', 'DateTime']]
-        # out_gdf['Label'] = self.img_gdf['Label']
+        out_gdf = self.img_gdf[['Label', 'Easting', 'Northing', 'Altitude', 'DateTime']]
         out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
 
     def dump_gdfs(self):
@@ -571,18 +570,9 @@ class TowLine:
         if self.img_gdf is not None:
             self._write_gdf(self.img_gdf, "image_centroids", format="GPKG", index=False)
 
-        #if self.delta_gdf is not None:
-        #    self._write_gdf(self.delta_gdf, "image_to_traj_fit", format="GPKG", index=False)
-
         if self.usbl_traj_lines is not None:
             self._write_gdf(self.usbl_traj_lines, "calculated_trajectory", format="GPKG", index=False)
-        
-        #if self.usbl_traj_pts is not None:
-        #    self._write_gdf(self.usbl_traj_pts, "calculated_trajectory", format="GPKG", index=False)
 
-        if self.bbox_gdf is not None:
-            self._write_gdf(self.bbox_gdf, "image_bboxes", format="GPKG", index=False)
-        f, ax = plt.subplots()
     
     def _write_gdf(self, in_gdf, basename, format="GPKG", index=False):
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
