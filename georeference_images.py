@@ -10,16 +10,16 @@ if __name__ == "__main__":
 
     parser.add_argument("--image_dir", "-i",
                         type=str,
-                        default="/Users/ross/Documents/git/drop-e_inputs/Sites_ross2023/AA278",
+                        default="/Users/ross/Documents/git/drop-e_inputs/Sites_ross2023/GV241",
                         help="Path to a directory containing underwater towcam imagery.")
 
     parser.add_argument("--out_dir", "-o",
                         type=str,
-                        default="/Users/ross/Documents/git/drop-e_outputs/Sep1/AA278_test2",
+                        default="/Users/ross/Documents/git/drop-e_outputs/Sep1/GV241_test2",
                         help="Path to a directory where output files will be saved.")
 
     parser.add_argument("--usbl_path", "-u",
-                        default="/Users/ross/Documents/git/drop-e_inputs/Sites_ross2023/AA278/AA278.gpkg",
+                        default="/Users/ross/Documents/git/drop-e_inputs/Sites_ross2023/GV241/GV241.gpkg",
                         type=str,
                         help="Path to a GIS file containing USBL GPS points.")
 
@@ -61,6 +61,13 @@ if __name__ == "__main__":
                         default=0.25,
                         help="One of two parameters that controls the smoothing of tracklines. If set \
                 to 0.0, no smoothing will be applied. Default value is 0.25.")
+    
+    parser.add_argument("--metashape_csv_sort_order", "-ms",
+                        type=str,
+                        default="DateTime",
+                        choices={"DateTime", "Easting", "Northing"},
+                        help="The field to sort the metashape csv file by. Default value is 'DateTime'.\
+                                The options are 'DateTime', 'Easting', or 'Northing'")
 
     # TODO: add verbose
 
@@ -78,7 +85,8 @@ if __name__ == "__main__":
                       args.elevation_field,
                       args.filter_quartile,
                       args.process_noise_std,
-                      args.measurement_noise_std)
+                      args.measurement_noise_std,
+                      args.metashape_csv_sort_order)
 
     # Currently a TowLine object has the following exposed methods:
     #  - write_georeferenced_images() - to write georeferenced images to disk

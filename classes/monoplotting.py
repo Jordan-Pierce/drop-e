@@ -13,7 +13,8 @@ import geopandas as gpd
 import movingpandas as mpd
 from movingpandas.trajectory_smoother import KalmanSmootherCV
 
-from shapely.geometry import Point, Polygon
+from shapely import is_simple, is_empty
+from shapely.geometry import Point, LineString, Polygon
 
 import rasterio
 from rasterio.enums import Resampling
@@ -36,9 +37,9 @@ ureg = pint.UnitRegistry()
 
 class TowLine:
     def __init__(
-        self, img_dir, out_dir, usbl_path="None", datetime_field="DateTime",
-        pdop_field=None, alt_field="CaAltDepth", filter_quartile=0.95,
-        process_noise_std=1.0, measurement_noise_std=0.25, preview_mode=False
+        self, img_dir, out_dir, usbl_path, datetime_field, pdop_field, 
+        alt_field, filter_quartile, process_noise_std, measurement_noise_std, 
+        metashape_csv_sort_order
     ):
         """ Initialize the TowLine class, and either preview or receive images."""
 
@@ -49,7 +50,6 @@ class TowLine:
         os.makedirs(self.out_dir, exist_ok=True)
 
         self.usbl_path = usbl_path
-
         self.datetime_field = datetime_field
         self.pdop_field = pdop_field
         self.alt_field = alt_field
@@ -57,7 +57,8 @@ class TowLine:
         self.filter_quartile = filter_quartile
         self.process_noise_std = process_noise_std
         self.measurement_noise_std = measurement_noise_std
-        self.preview_mode = preview_mode
+
+        self.metashape_csv_sort_order = metashape_csv_sort_order
 
         self.img_gdf = None  # the imagery database
         self.usbl_pts = None  # the USBL database (Point)
@@ -72,6 +73,7 @@ class TowLine:
         self.max_gsd_mode = 0.0
         self.max_gsd = 0.0
         self.min_gsd = 0.0
+        self.is_simple = None
 
         self.transforms = {}
 
@@ -275,6 +277,10 @@ class TowLine:
             self.usbl_traj = s_traj
             self.usbl_traj_pts = s_traj.to_point_gdf()
             self.usbl_traj_lines = s_traj.to_line_gdf()
+
+            linestring = s_traj.to_linestring()
+            self.is_simple = is_simple(linestring)
+            print(f"Is Simple??: {self.is_simple}")
         else:
             print(f"Either process_noise_std or measurement_noise_std is set to 0.0, \
                 therefore no smoothing will be applied to trackline.")
@@ -291,6 +297,10 @@ class TowLine:
             self.usbl_traj_pts = traj.to_point_gdf()
             self.usbl_traj_lines = traj.to_line_gdf()
             
+            linestring = traj.to_linestring()
+            self.is_simple = is_simple(linestring)
+            print(f"Is Simple??: {self.is_simple}")
+
     def fit_images_to_trajectory(self):
         """ Given a point GeoDataFrame of images, fit the images to the USBL trajectory
         line (a MovingPandas Trajectory object) using the DateTime field as the key.
@@ -321,6 +331,14 @@ class TowLine:
             
             self.img_gdf.at[idx, 'Direction'] = current_row['Direction']
             #row['Direction'] = current_row['Direction']
+
+        # If a geometry is empty, drop it from the geodataframe
+        print(f"Found {len(self.img_gdf[self.img_gdf.geometry.is_empty])} images with empty geometries.")
+        self.img_gdf = self.img_gdf[~self.img_gdf.geometry.is_empty]
+
+        # If the altitude field is empty, drop it from the geodataframe
+        print(f"Found {len(self.img_gdf[self.img_gdf[self.alt_field].isnull()])} images with empty altitude values.")
+        self.img_gdf = self.img_gdf[~self.img_gdf[self.alt_field].isnull()]
 
     def _zLookup(self):
         """ Given a a USBL dataframe with precise Z data, correlate and interpolate
@@ -453,6 +471,10 @@ class TowLine:
         rot_br = self.___rotate_point_3d(br, math.radians(row.Direction), 'z', origin=origin)
 
         corners = [Point(rot_bl), Point(rot_br), Point(rot_tr), Point(rot_tl)]
+        for c in corners:
+            if is_empty(c):
+                print("WARNING: Empty corner GCP detected. This image will be skipped.")
+                return None
 
         # create shapely polygon from the corners
         rot_bbox = Polygon([[p.x, p.y] for p in corners])
@@ -551,10 +573,18 @@ class TowLine:
     """PLOTTING + WRITING FCNS"""
     def write_metashape_csv(self):
         print("WRITING METASHAPE CSV")
+
         self.img_gdf['Easting'] = self.img_gdf.geometry.x
         self.img_gdf['Northing'] = self.img_gdf.geometry.y
         self.img_gdf['Altitude'] = self.img_gdf[self.alt_field]
         self.img_gdf['Altitude_Unit'] = "meters"
+
+        if self.metashape_csv_sort_order == "DateTime":
+            self.img_gdf.sort_index(inplace=True)
+        elif self.metashape_csv_sort_order == "Easting":
+            self.img_gdf.sort_values(by=['Easting'], inplace=True)
+        elif self.metashape_csv_sort_order == "Northing":
+            self.img_gdf.sort_values(by=['Northing'], inplace=True)
 
         out_gdf = self.img_gdf[['Label', 'Easting', 'Northing', 'Altitude', 'DateTime']]
         out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
@@ -568,7 +598,6 @@ class TowLine:
         if self.usbl_traj_lines is not None:
             self._write_gdf(self.usbl_traj_lines, "calculated_trajectory", format="GPKG", index=False)
 
-    
     def _write_gdf(self, in_gdf, basename, format="GPKG", index=False):
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
         in_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'],
