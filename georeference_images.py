@@ -69,8 +69,6 @@ if __name__ == "__main__":
                         help="The field to sort the metashape csv file by. Default value is 'DateTime'.\
                                 The options are 'DateTime', 'Easting', or 'Northing'")
 
-    # TODO: add verbose
-
     args = parser.parse_args()
 
     # Create a TowLine object, which kicks off a pre-defined processing chain based on

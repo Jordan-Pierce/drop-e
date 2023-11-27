@@ -132,6 +132,10 @@ class TowLine:
 
         self.img_gdf = img_df
 
+        if geoexifs[0]['GPS_Latitude_DMS'] is not None and geoexifs[0]['GPS_Longitude_DMS'] is not None:
+            epsg = self.utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
+            self.epsg_str = f"epsg:{epsg}"
+
         self.imgs_datetime_min = img_df['DateTime'].min()
         self.imgs_datetime_max = img_df['DateTime'].max()
 
@@ -539,6 +543,22 @@ class TowLine:
         # Extract the ground spacing distance from each row of the.img_gdf
         self.img_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
     
+        self.apply_gsd(in_gdf)
+
+        self.max_gsd_mode = in_gdf.GSD_MAX.mode().max()
+        print(f"Mode of Max GSD: {self.max_gsd_mode}")
+
+        self._apply_upscale_factor(in_gdf)
+
+        self._apply_corner_gcps(in_gdf)
+
+        self._apply_transform(in_gdf)
+
+        self.bbox_gdf = in_gdf[['img_path', 'img_name', 'bbox']].copy()
+        self.bbox_gdf.geometry = self.bbox_gdf.bbox
+        self.bbox_gdf.crs = self.epsg_str
+
+
     def _scale_and_write_image(self, row):
         """ Contains the operations to take an input image and affine transform, open
         the source image, retrieve the pixel data, resample this data using the upscale
@@ -579,6 +599,7 @@ class TowLine:
         self.img_gdf['Altitude'] = self.img_gdf[self.alt_field]
         self.img_gdf['Altitude_Unit'] = "meters"
 
+
         if self.metashape_csv_sort_order == "DateTime":
             self.img_gdf.sort_index(inplace=True)
         elif self.metashape_csv_sort_order == "Easting":
@@ -599,6 +620,18 @@ class TowLine:
             self._write_gdf(self.usbl_traj_lines, "calculated_trajectory", format="GPKG", index=False)
 
     def _write_gdf(self, in_gdf, basename, format="GPKG", index=False):
+
+    """PLOTTING + WRITING FCNS"""
+    def write_metashape_csv(self):
+        self.fit_gdf['Easting'] = self.fit_gdf.geometry.x
+        self.fit_gdf['Northing'] = self.fit_gdf.geometry.y
+        self.fit_gdf['Elevation'] = self.fit_gdf[self.alt_field]
+
+        out_gdf = self.fit_gdf[['img_name', 'Easting', 'Northing', 'Elevation']]
+        out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
+
+    def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
+
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
         in_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'],
                         axis=1, inplace=True, errors='ignore')

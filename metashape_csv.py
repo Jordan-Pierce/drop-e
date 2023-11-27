@@ -24,14 +24,14 @@ if __name__ == "__main__":
                         type=str,
                         default="GUDateTime",
                         help="Name of the field in the USBL attribute table that contains temporal \
-                information. Default value is 'DateTime'.")
+                        information. Default value is 'DateTime'.")
 
     parser.add_argument("--pdop_field", "-pf",
                         type=str,
                         default=None,
                         help="Name of the field in the USBL attribute table that contains some form \
-            of positional accuracy, most often in the form of a PDOP value. Default \
-            value is 'Max_PDOP'.")
+                        of positional accuracy, most often in the form of a PDOP value. Default \
+                        value is 'Max_PDOP'.")
 
     parser.add_argument("--elevation_field", "-ef",
                         type=str,
@@ -44,20 +44,20 @@ if __name__ == "__main__":
                         type=float,
                         default=0.95,
                         help="A value between 0.0 and 1.0 that controls the filtering of USBL points \
-                based on a user-specified --pdop_field (-pf). If set to 1.0 then no \
-                filtering will be applied. Default value is 0.95 (keep 95% of values).")
+                        based on a user-specified --pdop_field (-pf). If set to 1.0 then no \
+                        filtering will be applied. Default value is 0.95 (keep 95% of values).")
 
     parser.add_argument("--process_noise_std", "-p",
                         type=float,
                         default=1.0,
                         help="One of two parameters that controls the smoothing of tracklines. If set \
-                to 0.0, no smoothing will be applied. Default value is 1.0.")
+                        to 0.0, no smoothing will be applied. Default value is 1.0.")
 
     parser.add_argument("--measurement_noise_std", "-m",
                         type=float,
                         default=0.25,
                         help="One of two parameters that controls the smoothing of tracklines. If set \
-                to 0.0, no smoothing will be applied. Default value is 0.25.")
+                        to 0.0, no smoothing will be applied. Default value is 0.25.")
 
     # add verbose
 
@@ -72,8 +72,10 @@ if __name__ == "__main__":
                       args.filter_quartile, args.process_noise_std,
                       args.measurement_noise_std)
 
+
     # Dump the GDFs...
     towline.dump_gdfs()
 
     # Write metashape CSV...
     towline.write_metashape_csv()
+
