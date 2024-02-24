@@ -537,21 +537,6 @@ class TowLine:
         print("WRITING GEOREFERENCED IMAGES")
         # Extract the ground spacing distance from each row of the img_gdf
         self.img_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
-    
-        self.apply_gsd(self.img_gdf)
-
-        self.max_gsd_mode = self.img_gdf.GSD_MAX.mode().max()
-        print(f"Mode of Max GSD: {self.max_gsd_mode}")
-
-        self._apply_upscale_factor(self.img_gdf)
-
-        self._apply_corner_gcps(self.img_gdf)
-
-        self._apply_transform(self.img_gdf)
-
-        self.bbox_gdf = self.img_gdf[['img_path', 'img_name', 'bbox']].copy()
-        self.bbox_gdf.geometry = self.bbox_gdf.bbox
-        self.bbox_gdf.crs = self.epsg_str
 
     def _scale_and_write_image(self, row):
         """ Contains the operations to take an input image and affine transform, open
@@ -592,7 +577,6 @@ class TowLine:
         self.img_gdf['Northing'] = self.img_gdf.geometry.y
         self.img_gdf['Altitude'] = self.img_gdf[self.alt_field]
         self.img_gdf['Altitude_Unit'] = "meters"
-
 
         if self.metashape_csv_sort_order == "DateTime":
             self.img_gdf.sort_index(inplace=True)
