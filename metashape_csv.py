@@ -59,23 +59,17 @@ if __name__ == "__main__":
                         help="One of two parameters that controls the smoothing of tracklines. If set \
                         to 0.0, no smoothing will be applied. Default value is 0.25.")
 
-    # add verbose
-
     args = parser.parse_args()
 
     # Create a TowLine object, which kicks off a pre-defined processing chain based on
     # the input arguments. This processing chain computes vector files (GDFs) and meta-
     # data (stored in GDF attribute tables) that pertain to georeferencing of imagery.
-
     towline = TowLine(args.image_dir, args.out_dir, args.usbl_path,
                       args.datetime_field, args.pdop_field, args.elevation_field,
                       args.filter_quartile, args.process_noise_std,
                       args.measurement_noise_std)
 
 
-    # Dump the GDFs...
     towline.dump_gdfs()
 
-    # Write metashape CSV...
     towline.write_metashape_csv()
-

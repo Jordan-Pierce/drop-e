@@ -8,6 +8,8 @@ from datetime import datetime
 from PIL import Image as Image
 from exif import Image as ExifImage
 
+from matplotlib import pyplot as plt
+
 import pandas as pd
 import geopandas as gpd
 import movingpandas as mpd
@@ -15,6 +17,7 @@ from movingpandas.trajectory_smoother import KalmanSmootherCV
 
 from shapely import is_simple, is_empty
 from shapely.geometry import Point, LineString, Polygon
+import utm
 
 import rasterio
 from rasterio.enums import Resampling
@@ -30,7 +33,7 @@ warnings.filterwarnings("ignore", message="CRS not set for some of the concatena
 
 allowed_img_ext = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
 
-res_unit_lookup = {1: "None", 2: "Inch", 3: "Centimeter", None: "None" }
+res_unit_lookup = {1: "None", 2: "Inch", 3: "Centimeter", None: "None"}
 
 ureg = pint.UnitRegistry()
 
@@ -41,7 +44,7 @@ class TowLine:
         alt_field, filter_quartile, process_noise_std, measurement_noise_std, 
         metashape_csv_sort_order
     ):
-        """ Initialize the TowLine class, and either preview or receive images."""
+        """ Initialize the TowLine class"""
 
         self.img_dir = img_dir
         self.out_dir = out_dir
@@ -63,11 +66,12 @@ class TowLine:
         self.img_gdf = None  # the imagery database
         self.usbl_pts = None  # the USBL database (Point)
 
-        self.usbl_traj = None  # the movinpandas trajectory
-        self.usbl_traj_lines = None # the movingpandas trajectory as lines
-        self.usbl_traj_pts = None  # the movingpandas trajectory as points
-        
-        self.bbox_gdf = None  # the bounding box database
+        self.delta_gdf = None
+
+        # only one will be populated...
+        self.raw_usbl_traj = None
+        self.smooth_usbl_traj = None
+        self.smooth_usbl_traj_line = None
 
         self.epsg_str = None
         self.max_gsd_mode = 0.0
@@ -90,9 +94,7 @@ class TowLine:
 
         # Step 2: Read the USBL GPS data.
         print("BUILD USBL DF")
-        self.build_usbl_gdf(
-            pdop_field=self.pdop_field, filter_quartile=self.filter_quartile
-        )
+        self.build_usbl_gdf()
 
         # Step 3: Filter the USBL and image dataframes by the DateTime intersection
         # of the two data sets. This will remove any images or USBL pings that were
@@ -131,10 +133,6 @@ class TowLine:
         img_df.index = img_df['DateTime']
 
         self.img_gdf = img_df
-
-        if geoexifs[0]['GPS_Latitude_DMS'] is not None and geoexifs[0]['GPS_Longitude_DMS'] is not None:
-            epsg = self.utm_epsg_from_latlot(geoexifs[0]['GPS_Latitude_DD'], geoexifs[0]['GPS_Longitude_DD'])
-            self.epsg_str = f"epsg:{epsg}"
 
         self.imgs_datetime_min = img_df['DateTime'].min()
         self.imgs_datetime_max = img_df['DateTime'].max()
@@ -185,7 +183,7 @@ class TowLine:
 
         return exif_dict
 
-    def build_usbl_gdf(self, pdop_field=None, filter_quartile=0.95):
+    def build_usbl_gdf(self):
         """ Given a path to a geospatial vector point file
         (e.g. shapefile, geopackage, etc), read the file into a GeoPandas GeoDataFrame
         and optionally filter outliers based on a precision (PDOP) field.
@@ -193,24 +191,21 @@ class TowLine:
         # read USBL data into GeoPandas
         usbl_gdf = gpd.read_file(self.usbl_path)
 
-        # NOTE: Ross is commenting out the PDOP filter for now because Jordan pointed out flaws in the approach. This may
-        #        not really be needed, if we are able to just filter outliers using MovingPandas' built-in fcns.
-
         # filter outliers by keeping lower quartile of PDOP values
-        #if self.pdop_field is not None:
-        #    max_pdop = usbl_gdf[pdop_field].quantile(filter_quartile)
-        #    print(type(max_pdop), max_pdop)
-#
-        #    if not math.isnan(max_pdop):
-        #        count = len(usbl_gdf) - len(usbl_gdf[usbl_gdf[pdop_field] < max_pdop])
-        #        usbl_gdf = usbl_gdf[usbl_gdf[pdop_field] < max_pdop]
-#
-        #        print(f"--filter_quartile of {filter_quartile} allows a max PDOP of {max_pdop}.")
-        #        print(f"{count} USBL pings were filtered based on their {pdop_field} field.")
-        #    else:
-        #        print(f"WARNING: No valid PDOP values found in column {pdop_field}. No filtering will be performed.")
-        #else:
-        #    print ("WARNING: No PDOP field specified. No filtering will be performed.")
+        if self.pdop_field is not None:
+            max_pdop = usbl_gdf[self.pdop_field].quantile(self.filter_quartile)
+            print(max_pdop)
+
+            if not math.isnan(max_pdop):
+                count = len(usbl_gdf) - len(usbl_gdf[usbl_gdf[self.pdop_field] < max_pdop])
+                usbl_gdf = usbl_gdf[usbl_gdf[self.pdop_field] < max_pdop]
+
+                print(f"--filter_quartile of {self.filter_quartile} allows a max PDOP of {max_pdop}.")
+                print(f"{count} USBL pings were filtered based on their {self.pdop_field} field.")
+            else:
+                print(f"WARNING: No valid PDOP values found in column {self.pdop_field}. No filtering will be performed.")
+        else:
+            print("WARNING: No PDOP field specified. No filtering will be performed.")
 
         # standardize the datetime field, and set that as the index
         usbl_gdf["datetime_idx"] = usbl_gdf[self.datetime_field].apply(
@@ -540,24 +535,8 @@ class TowLine:
         the original image, resample to a new GSD, and write to the output directory.
         """
         print("WRITING GEOREFERENCED IMAGES")
-        # Extract the ground spacing distance from each row of the.img_gdf
+        # Extract the ground spacing distance from each row of the img_gdf
         self.img_gdf.apply(lambda row: self._scale_and_write_image(row), axis=1)
-    
-        self.apply_gsd(in_gdf)
-
-        self.max_gsd_mode = in_gdf.GSD_MAX.mode().max()
-        print(f"Mode of Max GSD: {self.max_gsd_mode}")
-
-        self._apply_upscale_factor(in_gdf)
-
-        self._apply_corner_gcps(in_gdf)
-
-        self._apply_transform(in_gdf)
-
-        self.bbox_gdf = in_gdf[['img_path', 'img_name', 'bbox']].copy()
-        self.bbox_gdf.geometry = self.bbox_gdf.bbox
-        self.bbox_gdf.crs = self.epsg_str
-
 
     def _scale_and_write_image(self, row):
         """ Contains the operations to take an input image and affine transform, open
@@ -599,7 +578,6 @@ class TowLine:
         self.img_gdf['Altitude'] = self.img_gdf[self.alt_field]
         self.img_gdf['Altitude_Unit'] = "meters"
 
-
         if self.metashape_csv_sort_order == "DateTime":
             self.img_gdf.sort_index(inplace=True)
         elif self.metashape_csv_sort_order == "Easting":
@@ -619,21 +597,9 @@ class TowLine:
         if self.usbl_traj_lines is not None:
             self._write_gdf(self.usbl_traj_lines, "calculated_trajectory", format="GPKG", index=False)
 
-    def _write_gdf(self, in_gdf, basename, format="GPKG", index=False):
-
-    """PLOTTING + WRITING FCNS"""
-    def write_metashape_csv(self):
-        self.fit_gdf['Easting'] = self.fit_gdf.geometry.x
-        self.fit_gdf['Northing'] = self.fit_gdf.geometry.y
-        self.fit_gdf['Elevation'] = self.fit_gdf[self.alt_field]
-
-        out_gdf = self.fit_gdf[['img_name', 'Easting', 'Northing', 'Elevation']]
-        out_gdf.to_csv(os.path.join(self.out_dir, "metashape.csv"), index=False)
-
     def _write_gdf(self, target_gdf, basename, format="GPKG", index=False):
-
         # TODO: this is a patch because writing tuples is a no-no. Need long-term fix...
-        in_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'],
+        target_gdf.drop(['GPS_Latitude_DMS', 'GPS_Latitude_Ref', 'GPS_Longitude_DMS', 'GPS_Longitude_Ref', 'bbox'],
                         axis=1, inplace=True, errors='ignore')
 
         if format == "GPKG":
@@ -643,6 +609,6 @@ class TowLine:
         else:
             raise ValueError(f"Invalid geospatial format: {format}. Must be GPKG or ESRI Shapefile.")
 
-        in_gdf.to_file(
+        target_gdf.to_file(
             out_path, driver=format, index=index
         )
