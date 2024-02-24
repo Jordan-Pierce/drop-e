@@ -4,14 +4,11 @@ import math
 import pint
 
 from datetime import datetime
-import dateutil
 
 from PIL import Image as Image
 from exif import Image as ExifImage
 
 from matplotlib import pyplot as plt
-from sklearn.linear_model import LinearRegression
-import numpy as np
 
 import pandas as pd
 import geopandas as gpd
@@ -19,7 +16,6 @@ import movingpandas as mpd
 from movingpandas.trajectory_smoother import KalmanSmootherCV
 
 from shapely.geometry import Point, LineString, Polygon
-import folium
 import utm
 
 import rasterio
@@ -43,7 +39,7 @@ class TowLine:
         pdop_field=None, alt_field="CaAltDepth", filter_quartile=0.95,
         process_noise_std=1.0, measurement_noise_std=0.25, preview_mode=False
     ):
-        """ Initialize the TowLine class, and either preview or receive images."""
+        """ Initialize the TowLine class"""
 
         self.img_dir = img_dir
         self.out_dir = out_dir
@@ -71,7 +67,7 @@ class TowLine:
         # only one will be populated...
         self.raw_usbl_traj = None
         self.smooth_usbl_traj = None
-        self.smooth_usbl_traj_line =  None
+        self.smooth_usbl_traj_line = None
 
         self.epsg_str = None
         self.max_gsd_mode = 0.0
@@ -89,7 +85,8 @@ class TowLine:
         # trajectory info, and fit the img_gdf to this new trajectory...
         if self.usbl_path is not None:
             self.build_usbl_gdf(
-                pdop_field=self.pdop_field, filter_quartile=self.filter_quartile
+                pdop_field=self.pdop_field, 
+                filter_quartile=self.filter_quartile,
             )
 
             self.calc_trajectory(
@@ -140,11 +137,6 @@ class TowLine:
                 crs=epsg
             )
             img_gdf.index = img_gdf['DateTime']
-
-            # TODO: how to reliably filter the "whiteboard images" w/o USBL timestamps?
-            #   IDEA: timedelta from movingpandas trajectory, reverse sort, and drop under
-            #   a certain threshold (or percentile). This assumes whiteboards are always first
-            #   in the sequence, which is a safe assumption for now, but maybe add reverse too?
 
             self.img_gdf = img_gdf
 
@@ -227,7 +219,7 @@ class TowLine:
                 exif_dict['UTM_Northing'] = north1
                 exif_dict['Estimated_UTM_Zone'] = str(zone) + zoneLetter
                 exif_dict['Estimated_UTM_EPSG'] = self._utm_epsg_from_latlot(
-                exif_dict['GPS_Latitude_DD'], exif_dict['GPS_Longitude_DD']
+                    exif_dict['GPS_Latitude_DD'], exif_dict['GPS_Longitude_DD']
                 )
             else:
                 print(f"WARNING: No GPS data found in {img}.")
